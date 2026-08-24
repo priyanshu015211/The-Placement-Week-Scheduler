@@ -44,9 +44,9 @@ def fetch_baseline_hints(read_cursor, presence_keys):
   rows = read_cursor.fetchall()
   hints = {}
   for row in rows:
-    sid = row['student_id'] if isinstance(row, dict) else row[0]
-    cid = row['company_id'] if isinstance(row, dict) else row[1]
-    start_dt = row['start_time'] if isinstance(row, dict) else row[2]
+    sid = row["student_id"] if isinstance(row, dict) else row[0]
+    cid = row["company_id"] if isinstance(row, dict) else row[1]
+    start_dt = row["start_time"] if isinstance(row, dict) else row[2]
     if start_dt and (sid, cid) in presence_keys:
       hints[(sid, cid)] = to_minutes(start_dt)
   return hints
@@ -55,17 +55,17 @@ def fetch_baseline_hints(read_cursor, presence_keys):
 def build_and_solve(
     companies, students, shortlists, rooms, panels, read_cursor=None
 ):
-  students_by_id = {s['id']: s for s in students}
-  companies_by_id = {c['id']: c for c in companies}
+  students_by_id = {s["id"]: s for s in students}
+  companies_by_id = {c["id"]: c for c in companies}
 
   panels_by_company = defaultdict(list)
   for p in panels:
-    panels_by_company[p['company_id']].append(p)
+    panels_by_company[p["company_id"]].append(p)
 
   shortlist_map = defaultdict(list)
   for sl in shortlists:
-    if sl['student_id'] in students_by_id:
-      shortlist_map[sl['company_id']].append(sl['student_id'])
+    if sl["student_id"] in students_by_id:
+      shortlist_map[sl["company_id"]].append(sl["student_id"])
 
   model = cp_model.CpModel()
 
@@ -82,14 +82,14 @@ def build_and_solve(
   company_duration = {}
 
   for company in companies:
-    cid = company['id']
+    cid = company["id"]
     if cid not in panels_by_company:
       continue
     slots = generate_slots_for_company(company)
     if not slots:
       continue
     company_slot_cache[cid] = [to_minutes(s) for s, _ in slots]
-    company_duration[cid] = company['interview_duration_min']
+    company_duration[cid] = company["interview_duration_min"]
 
   for cid, student_ids in shortlist_map.items():
     if cid not in company_slot_cache:
@@ -100,10 +100,10 @@ def build_and_solve(
 
     for sid in student_ids:
       key = (sid, cid)
-      pres = model.NewBoolVar(f'pres_{sid}_{cid}')
-      start = model.NewIntVarFromDomain(domain, f'start_{sid}_{cid}')
+      pres = model.NewBoolVar(f"pres_{sid}_{cid}")
+      start = model.NewIntVarFromDomain(domain, f"start_{sid}_{cid}")
       interval = model.NewOptionalIntervalVar(
-          start, duration, start + duration, pres, f'iv_{sid}_{cid}'
+          start, duration, start + duration, pres, f"iv_{sid}_{cid}"
       )
 
       presence[key] = pres
@@ -135,7 +135,7 @@ def build_and_solve(
   # 4. Lexicographic Objective: Total count dominates; tier priority breaks ties
   objective_terms = []
   for (sid, cid), pres in presence.items():
-    tier = companies_by_id[cid]['priority_tier']
+    tier = companies_by_id[cid]["priority_tier"]
     tier_bonus = TIER_WEIGHT.get(tier, 1)
     weight = PRIMARY_COUNT_WEIGHT + tier_bonus
     objective_terms.append(weight * pres)
@@ -152,7 +152,7 @@ def build_and_solve(
         hint_count += 1
       else:
         model.AddHint(pres, 0)
-    print(f'Loaded {hint_count} baseline interview hints for solver warm-start.')
+    print(f"Loaded {hint_count} baseline interview hints for solver warm-start.")
 
   # Solve
   solver = cp_model.CpSolver()
@@ -163,7 +163,7 @@ def build_and_solve(
 
   if status not in (cp_model.OPTIMAL, cp_model.FEASIBLE):
     raise RuntimeError(
-        f'Solver did not find a feasible solution (status={status})'
+        f"Solver did not find a feasible solution (status={status})"
     )
 
   raw_obj = solver.ObjectiveValue()
@@ -171,9 +171,9 @@ def build_and_solve(
   tier_score = int(raw_obj % PRIMARY_COUNT_WEIGHT)
 
   print(
-      f'Solver status: {solver.StatusName(status)} | Total Scheduled:'
-      f' {scheduled_cnt} | Tier Bonus: {tier_score} | Time:'
-      f' {solver.WallTime():.1f}s'
+      f"Solver status: {solver.StatusName(status)} | Total Scheduled:"
+      f" {scheduled_cnt} | Tier Bonus: {tier_score} | Time:"
+      f" {solver.WallTime():.1f}s"
   )
 
   # Collect chosen intervals
@@ -187,7 +187,7 @@ def build_and_solve(
       unscheduled.append((
           sid,
           cid,
-          'not selected by optimizer under capacity/fairness constraints',
+          "not selected by optimizer under capacity/fairness constraints",
       ))
 
   return chosen, unscheduled, panels_by_company
@@ -202,7 +202,7 @@ def assign_panel_ids(chosen, panels_by_company):
   result = []
   for cid, rows in by_company.items():
     rows.sort(key=lambda r: r[2])
-    panel_free_at = {p['id']: -1 for p in panels_by_company[cid]}
+    panel_free_at = {p["id"]: -1 for p in panels_by_company[cid]}
 
     for sid, cid_, start_m, end_m in rows:
       chosen_panel = None
@@ -211,7 +211,11 @@ def assign_panel_ids(chosen, panels_by_company):
           chosen_panel = pid
           break
       if chosen_panel is None:
-        chosen_panel = min(panel_free_at, key=panel_free_at.get)
+        raise RuntimeError(
+            f"Panel assignment failed for company {cid_} "
+            f"at interval {start_m}-{end_m}. "
+            "CP-SAT solution and panel post-processing disagree."
+        )
       panel_free_at[chosen_panel] = end_m
       result.append((sid, cid_, chosen_panel, start_m, end_m))
 
@@ -221,7 +225,7 @@ def assign_panel_ids(chosen, panels_by_company):
 def assign_room_ids(rows_with_panels, rooms):
   """Greedy interval coloring across global room pool."""
   rows_sorted = sorted(rows_with_panels, key=lambda r: r[3])
-  room_free_at = {r['id']: -1 for r in rooms}
+  room_free_at = {r["id"]: -1 for r in rooms}
 
   final = []
   for sid, cid, panel_id, start_m, end_m in rows_sorted:
@@ -231,7 +235,10 @@ def assign_room_ids(rows_with_panels, rooms):
         chosen_room = rid
         break
     if chosen_room is None:
-      chosen_room = min(room_free_at, key=room_free_at.get)
+      raise RuntimeError(
+          f"Room assignment failed for interval {start_m}-{end_m}. "
+          "CP-SAT solution and room post-processing disagree."
+      )
     room_free_at[chosen_room] = end_m
     final.append((sid, cid, chosen_room, panel_id, start_m, end_m))
 
@@ -243,13 +250,13 @@ def to_scheduled_rows(final):
   for sid, cid, room_id, panel_id, start_m, end_m in final:
     start_dt = from_minutes(start_m)
     end_dt = from_minutes(end_m)
-    rows.append((sid, cid, room_id, panel_id, start_dt, end_dt, 'scheduled'))
+    rows.append((sid, cid, room_id, panel_id, start_dt, end_dt, "scheduled"))
   return rows
 
 
 def write_results(cursor, scheduled_rows, unscheduled):
-  cursor.execute('DELETE FROM replan_log')
-  cursor.execute('DELETE FROM interviews')
+  cursor.execute("DELETE FROM replan_log")
+  cursor.execute("DELETE FROM interviews")
 
   insert_sql = """
         INSERT INTO interviews (student_id, company_id, room_id, panel_id, start_time, end_time, status, reason)
@@ -264,7 +271,7 @@ def write_results(cursor, scheduled_rows, unscheduled):
     cursor.executemany(insert_sql, rows)
 
   unsched_rows = [
-      (sid, cid, None, None, None, None, 'unscheduled', reason)
+      (sid, cid, None, None, None, None, "unscheduled", reason)
       for sid, cid, reason in unscheduled
   ]
   if unsched_rows:
@@ -275,26 +282,26 @@ def print_metrics(scheduled_rows, unscheduled):
   total = len(scheduled_rows) + len(unscheduled)
   pct = (len(scheduled_rows) / total * 100) if total else 0
 
-  print('\n' + '=' * 70)
-  print('OPTIMIZER RESULTS (OR-Tools CP-SAT)')
-  print('=' * 70)
-  print(f'Total shortlist entries : {total}')
-  print(f'Scheduled               : {len(scheduled_rows)} ({pct:.1f}%)')
-  print(f'Unscheduled             : {len(unscheduled)} ({100 - pct:.1f}%)')
+  print("\n" + "=" * 70)
+  print("OPTIMIZER RESULTS (OR-Tools CP-SAT)")
+  print("=" * 70)
+  print(f"Total shortlist entries : {total}")
+  print(f"Scheduled               : {len(scheduled_rows)} ({pct:.1f}%)")
+  print(f"Unscheduled             : {len(unscheduled)} ({100 - pct:.1f}%)")
 
   student_counts = defaultdict(int)
   for sid, cid, room_id, panel_id, start, end, status in scheduled_rows:
     student_counts[sid] += 1
 
   if student_counts:
-    print(f'\nStudents with interviews : {len(student_counts)}')
+    print(f"\nStudents with interviews : {len(student_counts)}")
     print(
-        'Average interviews      :'
-        f' {sum(student_counts.values())/len(student_counts):.2f}'
+        "Average interviews      :"
+        f" {sum(student_counts.values())/len(student_counts):.2f}"
     )
-    print(f'Maximum interviews       : {max(student_counts.values())}')
+    print(f"Maximum interviews       : {max(student_counts.values())}")
 
-  print('=' * 70)
+  print("=" * 70)
 
 
 def run():
@@ -318,16 +325,16 @@ def run():
     write_cursor.close()
 
     print_metrics(scheduled_rows, unscheduled)
-    print('\nOptimized schedule written to `interviews` table.')
+    print("\nOptimized schedule written to `interviews` table.")
 
   except Exception as e:
     conn.rollback()
-    print('Optimization failed, rolled back:', e)
+    print("Optimization failed, rolled back:", e)
     raise
   finally:
     read_cursor.close()
     conn.close()
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
   run()
