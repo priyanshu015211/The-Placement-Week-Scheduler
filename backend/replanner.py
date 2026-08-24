@@ -2,409 +2,1188 @@
 # Placement Week Scheduler — Real-Time Replanner
 # Mirai Labs Assignment A — Task 3
 # ============================================================
-#
-# Core Policy: MINIMAL DISPLACEMENT
-# Disruption Repair Sequence:
-# 1. Same-time repair (swap resource locally)
-# 2. Nearby-time repair (shift within +/- 3 hours)
-# 3. Cancellation (only if no feasible alternative exists)
-# ============================================================
 
 import argparse
 from datetime import timedelta
+
 from db import get_connection
-
-def log_replan(cursor, interview_id, old_room, old_panel, old_start, old_end, 
-               new_room, new_panel, new_start, new_end, reason):
-    """Writes a full before/after diff to replan_log based on the schema."""
-    cursor.execute("""
-        INSERT INTO replan_log 
-        (interview_id, old_room_id, old_panel_id, old_start_time, old_end_time, 
-         new_room_id, new_panel_id, new_start_time, new_end_time, reason)
-        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-    """, (interview_id, old_room, old_panel, old_start, old_end, 
-          new_room, new_panel, new_start, new_end, reason))
+from scheduler import generate_slots_for_company
 
 
-def get_free_room(cursor, start_time, end_time, exclude_room_id=None):
-    query = """
-        SELECT id, name
-        FROM rooms
-        WHERE id NOT IN (
-            SELECT room_id
-            FROM interviews
-            WHERE status = 'scheduled'
-              AND start_time < %s
-              AND end_time > %s
+MAX_REPLAN_SHIFT_MINUTES = 120
+
+
+# ------------------------------------------------------------
+# Helpers
+# ------------------------------------------------------------
+
+def overlaps(a_start, a_end, b_start, b_end):
+    return a_start < b_end and b_start < a_end
+
+
+def exclusion_sql(ids):
+    ids = list(ids or [])
+
+    if not ids:
+        return "", []
+
+    placeholders = ",".join(["%s"] * len(ids))
+
+    return (
+        f" AND id NOT IN ({placeholders}) ",
+        ids,
+    )
+
+
+def log_replan(
+    cursor,
+    interview_id,
+    old_room,
+    old_panel,
+    old_start,
+    old_end,
+    new_room,
+    new_panel,
+    new_start,
+    new_end,
+    reason,
+):
+    cursor.execute(
+        """
+        INSERT INTO replan_log (
+            interview_id,
+            old_room_id,
+            old_panel_id,
+            old_start_time,
+            old_end_time,
+            new_room_id,
+            new_panel_id,
+            new_start_time,
+            new_end_time,
+            reason
         )
+        VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+        """,
+        (
+            interview_id,
+            old_room,
+            old_panel,
+            old_start,
+            old_end,
+            new_room,
+            new_panel,
+            new_start,
+            new_end,
+            reason,
+        ),
+    )
+
+
+def log_disruption(
+    cursor,
+    disruption_type,
+    company_id=None,
+    panel_id=None,
+    student_id=None,
+    room_id=None,
+    delay_minutes=None,
+    reason=None,
+):
+    cursor.execute(
+        """
+        INSERT INTO disruptions (
+            type,
+            company_id,
+            panel_id,
+            student_id,
+            room_id,
+            delay_minutes,
+            reason
+        )
+        VALUES (%s,%s,%s,%s,%s,%s,%s)
+        """,
+        (
+            disruption_type,
+            company_id,
+            panel_id,
+            student_id,
+            room_id,
+            delay_minutes,
+            reason,
+        ),
+    )
+
+
+# ------------------------------------------------------------
+# Resource checks
+# ------------------------------------------------------------
+
+def free_room(
+    cursor,
+    start,
+    end,
+    excluded_ids,
+    banned_room=None,
+):
+    ex_sql, ex_params = exclusion_sql(
+        excluded_ids
+    )
+
+    query = f"""
+        SELECT id
+        FROM rooms
+        WHERE id != COALESCE(%s, -1)
+          AND id NOT IN (
+              SELECT room_id
+              FROM interviews
+              WHERE status = 'scheduled'
+                AND start_time < %s
+                AND end_time > %s
+                {ex_sql}
+          )
+        ORDER BY id
+        LIMIT 1
     """
-    params = [end_time, start_time]
-    
-    if exclude_room_id is not None:
-        query += " AND id != %s"
-        params.append(exclude_room_id)
 
-    cursor.execute(query, params)
-    rows = cursor.fetchall()
-    return rows[0] if rows else None
+    cursor.execute(
+        query,
+        [
+            banned_room,
+            end,
+            start,
+            *ex_params,
+        ],
+    )
+
+    return cursor.fetchone()
 
 
-def get_free_panel(cursor, company_id, start_time, end_time, exclude_panel_id=None):
-    query = """
+def free_panel(
+    cursor,
+    company_id,
+    start,
+    end,
+    excluded_ids,
+    banned_panel=None,
+):
+    ex_sql, ex_params = exclusion_sql(
+        excluded_ids
+    )
+
+    query = f"""
         SELECT id
         FROM panels
         WHERE company_id = %s
+          AND status = 'available'
+          AND id != COALESCE(%s, -1)
           AND id NOT IN (
               SELECT panel_id
               FROM interviews
               WHERE status = 'scheduled'
                 AND start_time < %s
                 AND end_time > %s
+                {ex_sql}
           )
+        ORDER BY id
+        LIMIT 1
     """
-    params = [company_id, end_time, start_time]
-    
-    if exclude_panel_id is not None:
-        query += " AND id != %s"
-        params.append(exclude_panel_id)
 
-    cursor.execute(query, params)
-    rows = cursor.fetchall()
-    return rows[0] if rows else None
+    cursor.execute(
+        query,
+        [
+            company_id,
+            banned_panel,
+            end,
+            start,
+            *ex_params,
+        ],
+    )
+
+    return cursor.fetchone()
 
 
-def has_student_conflict(cursor, student_id, new_start, new_end, exclude_interview_id):
-    cursor.execute("""
+def student_conflict(
+    cursor,
+    student_id,
+    start,
+    end,
+    excluded_ids,
+):
+    ex_sql, ex_params = exclusion_sql(
+        excluded_ids
+    )
+
+    cursor.execute(
+        f"""
         SELECT id
         FROM interviews
         WHERE student_id = %s
           AND status = 'scheduled'
-          AND id != %s
           AND start_time < %s
           AND end_time > %s
-    """, (student_id, exclude_interview_id, new_end, new_start))
-    
-    rows = cursor.fetchall()
-    return bool(rows)
+          {ex_sql}
+        LIMIT 1
+        """,
+        [
+            student_id,
+            end,
+            start,
+            *ex_params,
+        ],
+    )
+
+    return cursor.fetchone() is not None
 
 
-def is_panel_conflict(cursor, panel_id, new_start, new_end, exclude_interview_id):
-    cursor.execute("""
+def panel_conflict(
+    cursor,
+    panel_id,
+    start,
+    end,
+    excluded_ids,
+):
+    ex_sql, ex_params = exclusion_sql(
+        excluded_ids
+    )
+
+    cursor.execute(
+        f"""
         SELECT id
         FROM interviews
         WHERE panel_id = %s
           AND status = 'scheduled'
-          AND id != %s
           AND start_time < %s
           AND end_time > %s
-    """, (panel_id, exclude_interview_id, new_end, new_start))
-    
-    rows = cursor.fetchall()
-    return bool(rows)
+          {ex_sql}
+        LIMIT 1
+        """,
+        [
+            panel_id,
+            end,
+            start,
+            *ex_params,
+        ],
+    )
+
+    return cursor.fetchone() is not None
 
 
-def handle_student_withdrawal(cursor, student_id):
-    print(f"\n[DISRUPTION] Processing withdrawal for Student {student_id}...")
-    cursor.execute("UPDATE students SET status = 'withdrawn' WHERE id = %s", (student_id,))
-    
-    cursor.execute("""
-        SELECT * FROM interviews 
-        WHERE student_id = %s AND status = 'scheduled'
-    """, (student_id,))
-    affected = cursor.fetchall()
-    
+# ------------------------------------------------------------
+# Company slots
+# ------------------------------------------------------------
+
+def get_company_slots(cursor, company_id):
+    cursor.execute(
+        """
+        SELECT *
+        FROM companies
+        WHERE id = %s
+        """,
+        (company_id,),
+    )
+
+    company = cursor.fetchone()
+
+    if not company:
+        raise ValueError(
+            f"Company {company_id} not found"
+        )
+
+    return generate_slots_for_company(company)
+
+
+# ------------------------------------------------------------
+# Find replacement
+# ------------------------------------------------------------
+
+def find_replacement(
+    cursor,
+    row,
+    affected_ids,
+    earliest_start=None,
+    banned_room=None,
+    banned_panel=None,
+):
+    company_id = row["company_id"]
+    student_id = row["student_id"]
+
+    slots = get_company_slots(
+        cursor,
+        company_id,
+    )
+
+    old_start = row["start_time"]
+    old_room = row["room_id"]
+    old_panel = row["panel_id"]
+
+    candidates = []
+
+    for start, end in slots:
+
+        if earliest_start is not None:
+            if start < earliest_start:
+                continue
+
+        displacement = abs(
+            int(
+                (
+                    start - old_start
+                ).total_seconds() // 60
+            )
+        )
+
+        # Critical fairness/minimal-displacement rule.
+        if MAX_REPLAN_SHIFT_MINUTES is not None and displacement > MAX_REPLAN_SHIFT_MINUTES:
+            continue
+
+        if student_conflict(
+            cursor,
+            student_id,
+            start,
+            end,
+            affected_ids,
+        ):
+            continue
+
+        # ----------------------------------------------------
+        # Panel
+        # ----------------------------------------------------
+
+        panel = None
+
+        if (
+            banned_panel is None
+            and old_panel is not None
+            and not panel_conflict(
+                cursor,
+                old_panel,
+                start,
+                end,
+                affected_ids,
+            )
+        ):
+            panel = {
+                "id": old_panel
+            }
+        else:
+            panel = free_panel(
+                cursor,
+                company_id,
+                start,
+                end,
+                affected_ids,
+                banned_panel,
+            )
+
+        if not panel:
+            continue
+
+        # ----------------------------------------------------
+        # Room
+        # ----------------------------------------------------
+
+        room = None
+
+        if banned_room is None and old_room is not None:
+
+            ex_sql, ex_params = exclusion_sql(
+                affected_ids
+            )
+
+            cursor.execute(
+                f"""
+                SELECT id
+                FROM rooms
+                WHERE id = %s
+                  AND NOT EXISTS (
+                      SELECT 1
+                      FROM interviews
+                      WHERE room_id = %s
+                        AND status = 'scheduled'
+                        AND start_time < %s
+                        AND end_time > %s
+                        {ex_sql}
+                  )
+                """,
+                [
+                    old_room,
+                    old_room,
+                    end,
+                    start,
+                    *ex_params,
+                ],
+            )
+
+            room = cursor.fetchone()
+
+        if not room:
+            room = free_room(
+                cursor,
+                start,
+                end,
+                affected_ids,
+                banned_room,
+            )
+
+        if not room:
+            continue
+
+        candidates.append(
+            {
+                "start": start,
+                "end": end,
+                "room_id": room["id"],
+                "panel_id": panel["id"],
+                "displacement": displacement,
+            }
+        )
+
+    candidates.sort(
+        key=lambda c: (
+            c["displacement"],
+            c["start"],
+            c["room_id"],
+            c["panel_id"],
+        )
+    )
+
+    return (
+        candidates[0]
+        if candidates
+        else None
+    )
+
+
+# ------------------------------------------------------------
+# Cooperative batch reassignment
+# ------------------------------------------------------------
+
+def batch_reassign(
+    cursor,
+    affected,
+    banned_room=None,
+    banned_panel=None,
+    earliest_times=None,
+):
     if not affected:
-        print(f"-> Student {student_id} withdrawn. They had 0 active scheduled interviews. No disruption.")
-        return
+        return {}
 
-    for row in affected:
-        iid = row['id']
-        cursor.execute("UPDATE interviews SET status = 'cancelled', reason = 'Student withdrew' WHERE id = %s", (iid,))
-        log_replan(cursor, iid, 
-                   row['room_id'], row['panel_id'], row['start_time'], row['end_time'],
-                   None, None, None, None, "Student withdrew")
-        
-    print(f"-> Cancelled {len(affected)} scheduled interviews for Student {student_id}.")
+    affected_ids = {
+        row["id"]
+        for row in affected
+    }
 
+    affected_by_id = {
+        row["id"]: row
+        for row in affected
+    }
 
-def handle_room_unavailable(cursor, room_id):
-    print(f"\n[DISRUPTION] Processing offline status for Room {room_id}...")
-    cursor.execute("""
-        SELECT * FROM interviews 
-        WHERE room_id = %s AND status = 'scheduled'
-        ORDER BY start_time ASC
-    """, (room_id,))
-    affected = cursor.fetchall()
-    
-    repaired_same_time = 0
-    repaired_shifted = 0
-    cancelled = 0
-    
-    for row in affected:
-        iid, sid, pid = row['id'], row['student_id'], row['panel_id']
-        start, end = row['start_time'], row['end_time']
-        
-        # 1. Try exact same time with a different room
-        alt_room = get_free_room(cursor, start, end, exclude_room_id=room_id)
-        if alt_room:
-            cursor.execute("UPDATE interviews SET room_id = %s WHERE id = %s", (alt_room['id'], iid))
-            log_replan(cursor, iid, room_id, pid, start, end, alt_room['id'], pid, start, end, f"Room {room_id} dropped")
-            repaired_same_time += 1
+    assigned = {}
+
+    # Keep deterministic chronological order.
+    ordered = sorted(
+        affected,
+        key=lambda r: (
+            r["start_time"],
+            r["id"],
+        ),
+    )
+
+    for row in ordered:
+
+        earliest = None
+
+        if earliest_times:
+            earliest = earliest_times.get(
+                row["id"]
+            )
+
+        candidate = find_replacement(
+            cursor,
+            row,
+            affected_ids,
+            earliest_start=earliest,
+            banned_room=banned_room,
+            banned_panel=banned_panel,
+        )
+
+        if not candidate:
             continue
 
-        # 2 & 3. Try nearby slots (expand search outward up to +/- 3 hours in 20 min intervals)
-        found_alt = False
-        for offset in range(20, 181, 20):
-            for sign in [1, -1]:
-                shift = timedelta(minutes=offset * sign)
-                new_start = start + shift
-                new_end = end + shift
-                
-                if new_start.hour < 9: continue
-                if new_end.hour > 17 or (new_end.hour == 17 and new_end.minute > 0): continue
-                if new_start.date() != start.date(): continue
-                
-                if has_student_conflict(cursor, sid, new_start, new_end, iid): continue
-                if is_panel_conflict(cursor, pid, new_start, new_end, iid): continue
-                
-                alt_room_shifted = get_free_room(cursor, new_start, new_end)
-                if not alt_room_shifted: continue
-                
-                cursor.execute("""
-                    UPDATE interviews 
-                    SET start_time = %s, end_time = %s, room_id = %s 
-                    WHERE id = %s
-                """, (new_start, new_end, alt_room_shifted['id'], iid))
-                
-                log_replan(cursor, iid, room_id, pid, start, end, 
-                           alt_room_shifted['id'], pid, new_start, new_end, 
-                           f"Room {room_id} offline. Shifted {offset*sign}m")
-                repaired_shifted += 1
-                found_alt = True
+        conflict = False
+
+        for other_id, other in assigned.items():
+
+            # Resource conflicts inside the new batch.
+            if (
+                candidate["room_id"]
+                == other["room_id"]
+                and overlaps(
+                    candidate["start"],
+                    candidate["end"],
+                    other["start"],
+                    other["end"],
+                )
+            ):
+                conflict = True
                 break
-                
-            if found_alt: break
-                
-        if found_alt: continue
 
-        # 4. Cancel
-        cursor.execute("UPDATE interviews SET status = 'cancelled', reason = 'Room unavailable' WHERE id = %s", (iid,))
-        log_replan(cursor, iid, room_id, pid, start, end, None, None, None, None, f"Room {room_id} offline, no replacement")
-        cancelled += 1
-            
-    print(f"-> Affected: {len(affected)} | Same-Time Repair: {repaired_same_time} | Shifted Repair: {repaired_shifted} | Cancelled: {cancelled}")
+            if (
+                candidate["panel_id"]
+                == other["panel_id"]
+                and overlaps(
+                    candidate["start"],
+                    candidate["end"],
+                    other["start"],
+                    other["end"],
+                )
+            ):
+                conflict = True
+                break
+
+            # Student conflicts inside the new batch.
+            other_row = affected_by_id[
+                other_id
+            ]
+
+            if (
+                row["student_id"]
+                == other_row["student_id"]
+                and overlaps(
+                    candidate["start"],
+                    candidate["end"],
+                    other["start"],
+                    other["end"],
+                )
+            ):
+                conflict = True
+                break
+
+        if not conflict:
+            assigned[row["id"]] = candidate
+
+    return assigned
 
 
-def handle_panel_dropped(cursor, panel_id):
-    print(f"\n[DISRUPTION] Processing dropped Panel {panel_id}...")
-    cursor.execute("""
-        SELECT * FROM interviews 
-        WHERE panel_id = %s AND status = 'scheduled'
-        ORDER BY start_time ASC
-    """, (panel_id,))
+# ------------------------------------------------------------
+# Student withdrawal
+# ------------------------------------------------------------
+
+def handle_withdrawal(
+    cursor,
+    student_id,
+):
+    print(
+        f"\n[DISRUPTION] Student {student_id} withdrawal"
+    )
+
+    cursor.execute(
+        """
+        SELECT *
+        FROM interviews
+        WHERE student_id = %s
+          AND status = 'scheduled'
+        """,
+        (student_id,),
+    )
+
     affected = cursor.fetchall()
-    
-    repaired_same_time = 0
-    repaired_shifted = 0
-    cancelled = 0
-    
+
+    cursor.execute(
+        """
+        UPDATE students
+        SET status = 'withdrawn'
+        WHERE id = %s
+        """,
+        (student_id,),
+    )
+
+    log_disruption(
+        cursor,
+        "student_withdrawal",
+        student_id=student_id,
+        reason="Student withdrew",
+    )
+
     for row in affected:
-        iid, cid, sid, rid = row['id'], row['company_id'], row['student_id'], row['room_id']
-        start, end = row['start_time'], row['end_time']
-        
-        # 1. Try exact same time with a different panel
-        alt_panel = get_free_panel(cursor, cid, start, end, exclude_panel_id=panel_id)
-        if alt_panel:
-            cursor.execute("UPDATE interviews SET panel_id = %s WHERE id = %s", (alt_panel['id'], iid))
-            log_replan(cursor, iid, rid, panel_id, start, end, rid, alt_panel['id'], start, end, f"Panel {panel_id} dropped")
-            repaired_same_time += 1
-            continue
-            
-        # 2 & 3. Try nearby slots (expand search outward up to +/- 3 hours in 20 min intervals)
-        found_alt = False
-        for offset in range(20, 181, 20):
-            for sign in [1, -1]: # +1 is later, -1 is earlier
-                shift = timedelta(minutes=offset * sign)
-                new_start = start + shift
-                new_end = end + shift
-                
-                if new_start.hour < 9: continue
-                if new_end.hour > 17 or (new_end.hour == 17 and new_end.minute > 0): continue
-                if new_start.date() != start.date(): continue
-                
-                if has_student_conflict(cursor, sid, new_start, new_end, iid): continue
-                
-                alt_room = get_free_room(cursor, new_start, new_end)
-                if not alt_room: continue
-                
-                alt_panel_shifted = get_free_panel(cursor, cid, new_start, new_end, exclude_panel_id=panel_id)
-                if not alt_panel_shifted: continue
-                
-                cursor.execute("""
-                    UPDATE interviews 
-                    SET start_time = %s, end_time = %s, room_id = %s, panel_id = %s 
-                    WHERE id = %s
-                """, (new_start, new_end, alt_room['id'], alt_panel_shifted['id'], iid))
-                
-                log_replan(cursor, iid, rid, panel_id, start, end, 
-                           alt_room['id'], alt_panel_shifted['id'], new_start, new_end, 
-                           f"Panel {panel_id} dropped. Shifted {offset*sign}m")
-                repaired_shifted += 1
-                found_alt = True
-                break
-                
-            if found_alt: break
-                
-        if found_alt: continue
-            
-        # 4. Cancel
-        cursor.execute("UPDATE interviews SET status = 'cancelled', reason = 'Panel dropped' WHERE id = %s", (iid,))
-        log_replan(cursor, iid, rid, panel_id, start, end, None, None, None, None, f"Panel {panel_id} dropped, no capacity")
-        cancelled += 1
 
-    print(f"-> Affected: {len(affected)} | Same-Time Repair: {repaired_same_time} | Shifted Repair: {repaired_shifted} | Cancelled: {cancelled}")
+        cursor.execute(
+            """
+            UPDATE interviews
+            SET status = 'cancelled',
+                reason = 'Student withdrew'
+            WHERE id = %s
+            """,
+            (row["id"],),
+        )
+
+        log_replan(
+            cursor,
+            row["id"],
+            row["room_id"],
+            row["panel_id"],
+            row["start_time"],
+            row["end_time"],
+            None,
+            None,
+            None,
+            None,
+            "Student withdrew",
+        )
+
+    print(
+        f"-> Cancelled {len(affected)} interviews"
+    )
 
 
-def handle_company_delay(cursor, company_id, delay_minutes):
-    print(f"\n[DISRUPTION] Processing {delay_minutes} min delay for Company {company_id}...")
-    cursor.execute("""
-        SELECT * FROM interviews 
-        WHERE company_id = %s AND status = 'scheduled'
-        ORDER BY start_time ASC
-    """, (company_id,))
+# ------------------------------------------------------------
+# Room unavailable
+# ------------------------------------------------------------
+
+def handle_room_offline(
+    cursor,
+    room_id,
+):
+    print(
+        f"\n[DISRUPTION] Room {room_id} offline"
+    )
+
+    cursor.execute(
+        """
+        SELECT *
+        FROM interviews
+        WHERE room_id = %s
+          AND status = 'scheduled'
+        ORDER BY start_time, id
+        """,
+        (room_id,),
+    )
+
     affected = cursor.fetchall()
-    
+
+    log_disruption(
+        cursor,
+        "room_unavailable",
+        room_id=room_id,
+        reason=f"Room {room_id} offline",
+    )
+
+    assignment = batch_reassign(
+        cursor,
+        affected,
+        banned_room=room_id,
+    )
+
     repaired = 0
     cancelled = 0
-    delay = timedelta(minutes=delay_minutes)
-    
+
     for row in affected:
-        iid, sid, rid, pid = row['id'], row['student_id'], row['room_id'], row['panel_id']
-        old_start, old_end = row['start_time'], row['end_time']
-        new_start = old_start + delay
-        new_end = old_end + delay
-        
-        # Check end of day bounds
-        if new_end.hour > 17 or (new_end.hour == 17 and new_end.minute > 0):
-            cursor.execute("UPDATE interviews SET status = 'cancelled', reason = 'Pushed past end of day' WHERE id = %s", (iid,))
-            log_replan(cursor, iid, rid, pid, old_start, old_end, None, None, None, None, f"Company {company_id} delay OOB")
+
+        iid = row["id"]
+
+        if iid in assignment:
+
+            new = assignment[iid]
+
+            cursor.execute(
+                """
+                UPDATE interviews
+                SET start_time=%s,
+                    end_time=%s,
+                    room_id=%s,
+                    panel_id=%s
+                WHERE id=%s
+                """,
+                (
+                    new["start"],
+                    new["end"],
+                    new["room_id"],
+                    new["panel_id"],
+                    iid,
+                ),
+            )
+
+            log_replan(
+                cursor,
+                iid,
+                row["room_id"],
+                row["panel_id"],
+                row["start_time"],
+                row["end_time"],
+                new["room_id"],
+                new["panel_id"],
+                new["start"],
+                new["end"],
+                (
+                    f"Room {room_id} offline; "
+                    f"shifted {new['displacement']} min"
+                ),
+            )
+
+            repaired += 1
+
+        else:
+
+            cursor.execute(
+                """
+                UPDATE interviews
+                SET status='cancelled',
+                    reason='Room unavailable'
+                WHERE id=%s
+                """,
+                (iid,),
+            )
+
+            log_replan(
+                cursor,
+                iid,
+                row["room_id"],
+                row["panel_id"],
+                row["start_time"],
+                row["end_time"],
+                None,
+                None,
+                None,
+                None,
+                (
+                    f"Room {room_id} offline; "
+                    "no feasible replacement within "
+                    f"{MAX_REPLAN_SHIFT_MINUTES} min"
+                ),
+            )
+
             cancelled += 1
-            continue
 
-        # Check student conflict
-        if has_student_conflict(cursor, sid, new_start, new_end, iid):
-            cursor.execute("UPDATE interviews SET status = 'cancelled', reason = 'Student schedule conflict' WHERE id = %s", (iid,))
-            log_replan(cursor, iid, rid, pid, old_start, old_end, None, None, None, None, "Student time conflict after delay")
+    print(
+        f"-> Affected: {len(affected)} | "
+        f"Repaired: {repaired} | "
+        f"Cancelled: {cancelled}"
+    )
+
+
+# ------------------------------------------------------------
+# Panel dropped
+# ------------------------------------------------------------
+
+def handle_panel_drop(
+    cursor,
+    panel_id,
+):
+    print(
+        f"\n[DISRUPTION] Panel {panel_id} dropped"
+    )
+
+    cursor.execute(
+        """
+        SELECT *
+        FROM interviews
+        WHERE panel_id = %s
+          AND status = 'scheduled'
+        ORDER BY start_time, id
+        """,
+        (panel_id,),
+    )
+
+    affected = cursor.fetchall()
+
+    log_disruption(
+        cursor,
+        "panel_unavailable",
+        panel_id=panel_id,
+        reason=f"Panel {panel_id} dropped",
+    )
+
+    assignment = batch_reassign(
+        cursor,
+        affected,
+        banned_panel=panel_id,
+    )
+
+    repaired = 0
+    cancelled = 0
+
+    for row in affected:
+
+        iid = row["id"]
+
+        if iid in assignment:
+
+            new = assignment[iid]
+
+            cursor.execute(
+                """
+                UPDATE interviews
+                SET start_time=%s,
+                    end_time=%s,
+                    room_id=%s,
+                    panel_id=%s
+                WHERE id=%s
+                """,
+                (
+                    new["start"],
+                    new["end"],
+                    new["room_id"],
+                    new["panel_id"],
+                    iid,
+                ),
+            )
+
+            log_replan(
+                cursor,
+                iid,
+                row["room_id"],
+                row["panel_id"],
+                row["start_time"],
+                row["end_time"],
+                new["room_id"],
+                new["panel_id"],
+                new["start"],
+                new["end"],
+                (
+                    f"Panel {panel_id} dropped; "
+                    f"shifted {new['displacement']} min"
+                ),
+            )
+
+            repaired += 1
+
+        else:
+
+            cursor.execute(
+                """
+                UPDATE interviews
+                SET status='cancelled',
+                    reason='Panel dropped'
+                WHERE id=%s
+                """,
+                (iid,),
+            )
+
+            log_replan(
+                cursor,
+                iid,
+                row["room_id"],
+                row["panel_id"],
+                row["start_time"],
+                row["end_time"],
+                None,
+                None,
+                None,
+                None,
+                (
+                    f"Panel {panel_id} dropped; "
+                    "no feasible replacement within "
+                    f"{MAX_REPLAN_SHIFT_MINUTES} min"
+                ),
+            )
+
             cancelled += 1
-            continue
 
-        # Check panel conflict natively caused by the delay
-        new_panel_id = pid
-        if is_panel_conflict(cursor, pid, new_start, new_end, iid):
-            alt_panel = get_free_panel(cursor, company_id, new_start, new_end, exclude_panel_id=pid)
-            if alt_panel:
-                new_panel_id = alt_panel['id']
-            else:
-                cursor.execute("UPDATE interviews SET status = 'cancelled', reason = 'Panel schedule conflict' WHERE id = %s", (iid,))
-                log_replan(cursor, iid, rid, pid, old_start, old_end, None, None, None, None, "Panel time conflict after delay")
-                cancelled += 1
-                continue
-            
-        # Check room conflict natives caused by the delay
-        new_room_id = rid
-        cursor.execute("""
-            SELECT id FROM interviews 
-            WHERE room_id = %s AND status = 'scheduled' AND id != %s
-            AND start_time < %s AND end_time > %s
-        """, (rid, iid, new_end, new_start))
-        
-        if cursor.fetchall():
-            alt_room = get_free_room(cursor, new_start, new_end, exclude_room_id=rid)
-            if alt_room:
-                new_room_id = alt_room['id']
-            else:
-                cursor.execute("UPDATE interviews SET status = 'cancelled', reason = 'No rooms at delayed time' WHERE id = %s", (iid,))
-                log_replan(cursor, iid, rid, pid, old_start, old_end, None, None, None, None, "No room available after delay")
-                cancelled += 1
-                continue
-                
-        cursor.execute("UPDATE interviews SET start_time = %s, end_time = %s, room_id = %s, panel_id = %s WHERE id = %s", 
-                       (new_start, new_end, new_room_id, new_panel_id, iid))
-        log_replan(cursor, iid, rid, pid, old_start, old_end, new_room_id, new_panel_id, new_start, new_end, f"Delayed +{delay_minutes}m")
-        repaired += 1
-        
-    print(f"-> Affected: {len(affected)} | Shifted: {repaired} | Cancelled: {cancelled}")
+    print(
+        f"-> Affected: {len(affected)} | "
+        f"Repaired: {repaired} | "
+        f"Cancelled: {cancelled}"
+    )
 
 
-def view_replan_log(cursor):
-    print("\n" + "="*80)
-    print("REPLAN LOG (Coordinator Diff Dashboard)")
-    print("="*80)
-    cursor.execute("SELECT * FROM replan_log ORDER BY logged_at ASC")
-    logs = cursor.fetchall()
-    
-    if not logs:
+# ------------------------------------------------------------
+# Company delay
+# ------------------------------------------------------------
+
+def handle_company_delay(
+    cursor,
+    company_id,
+    delay_minutes,
+):
+    print(
+        f"\n[DISRUPTION] Company {company_id} "
+        f"delayed by {delay_minutes} min"
+    )
+
+    cursor.execute(
+        """
+        SELECT *
+        FROM interviews
+        WHERE company_id = %s
+          AND status = 'scheduled'
+        ORDER BY start_time, id
+        """,
+        (company_id,),
+    )
+
+    affected = cursor.fetchall()
+
+    log_disruption(
+        cursor,
+        "company_delay",
+        company_id=company_id,
+        delay_minutes=delay_minutes,
+        reason=(
+            f"Company delayed by "
+            f"{delay_minutes} minutes"
+        ),
+    )
+
+    delay = timedelta(
+        minutes=delay_minutes
+    )
+
+    earliest_times = {
+        row["id"]:
+            row["start_time"] + delay
+        for row in affected
+    }
+
+    assignment = batch_reassign(
+        cursor,
+        affected,
+        earliest_times=earliest_times,
+    )
+
+    repaired = 0
+    cancelled = 0
+
+    for row in affected:
+
+        iid = row["id"]
+
+        if iid in assignment:
+
+            new = assignment[iid]
+
+            cursor.execute(
+                """
+                UPDATE interviews
+                SET start_time=%s,
+                    end_time=%s,
+                    room_id=%s,
+                    panel_id=%s
+                WHERE id=%s
+                """,
+                (
+                    new["start"],
+                    new["end"],
+                    new["room_id"],
+                    new["panel_id"],
+                    iid,
+                ),
+            )
+
+            log_replan(
+                cursor,
+                iid,
+                row["room_id"],
+                row["panel_id"],
+                row["start_time"],
+                row["end_time"],
+                new["room_id"],
+                new["panel_id"],
+                new["start"],
+                new["end"],
+                (
+                    f"Company delay {delay_minutes} min; "
+                    f"actual shift {new['displacement']} min"
+                ),
+            )
+
+            repaired += 1
+
+        else:
+
+            cursor.execute(
+                """
+                UPDATE interviews
+                SET status='cancelled',
+                    reason='No feasible slot after company delay'
+                WHERE id=%s
+                """,
+                (iid,),
+            )
+
+            log_replan(
+                cursor,
+                iid,
+                row["room_id"],
+                row["panel_id"],
+                row["start_time"],
+                row["end_time"],
+                None,
+                None,
+                None,
+                None,
+                (
+                    "No feasible slot after company "
+                    f"delay within {MAX_REPLAN_SHIFT_MINUTES} "
+                    "min displacement"
+                ),
+            )
+
+            cancelled += 1
+
+    print(
+        f"-> Affected: {len(affected)} | "
+        f"Repaired: {repaired} | "
+        f"Cancelled: {cancelled}"
+    )
+
+
+# ------------------------------------------------------------
+# View log
+# ------------------------------------------------------------
+
+def view_log(cursor):
+    print("\n" + "=" * 100)
+    print("REPLAN LOG")
+    print("=" * 100)
+
+    cursor.execute(
+        """
+        SELECT *
+        FROM replan_log
+        ORDER BY logged_at, id
+        """
+    )
+
+    rows = cursor.fetchall()
+
+    if not rows:
         print("No disruptions logged.")
         return
-        
-    for log in logs:
-        iid = log['interview_id']
-        reason = log.get('reason', 'N/A')
-        
-        o_start = log['old_start_time'].strftime("%H:%M") if log['old_start_time'] else ""
-        o_end = log['old_end_time'].strftime("%H:%M") if log['old_end_time'] else ""
-        n_start = log['new_start_time'].strftime("%H:%M") if log['new_start_time'] else "CANCELLED"
-        n_end = log['new_end_time'].strftime("%H:%M") if log['new_end_time'] else "CANCELLED"
-        
-        o_room = f"Rm {log['old_room_id']}" if log['old_room_id'] else ""
-        o_pan = f"Pan {log['old_panel_id']}" if log['old_panel_id'] else ""
-        
-        n_room = f"Rm {log['new_room_id']}" if log['new_room_id'] else "-"
-        n_pan = f"Pan {log['new_panel_id']}" if log['new_panel_id'] else "-"
-        
-        old_str = f"OLD: {o_room}, {o_pan}, {o_start}-{o_end}"
-        new_str = f"NEW: {n_room}, {n_pan}, {n_start}-{n_end}"
-        
-        if not log['new_room_id']:
-            new_str = "NEW: CANCELLED"
-            
-        print(f"Intv {iid:<4} | {old_str:<32} | {new_str:<32} | {reason}")
-    print("="*80)
+
+    for row in rows:
+
+        old_time = (
+            f"{row['old_start_time']:%H:%M}-"
+            f"{row['old_end_time']:%H:%M}"
+        )
+
+        if row["new_start_time"]:
+            new_time = (
+                f"{row['new_start_time']:%H:%M}-"
+                f"{row['new_end_time']:%H:%M}"
+            )
+        else:
+            new_time = "CANCELLED"
+
+        old_room = row["old_room_id"] or "-"
+        old_panel = row["old_panel_id"] or "-"
+        new_room = row["new_room_id"] or "-"
+        new_panel = row["new_panel_id"] or "-"
+
+        print(
+            f"Intv {row['interview_id']} | "
+            f"OLD Rm {old_room} "
+            f"Pan {old_panel} "
+            f"{old_time} | "
+            f"NEW Rm {new_room} "
+            f"Pan {new_panel} "
+            f"{new_time} | "
+            f"{row['reason']}"
+        )
+
+
+# ------------------------------------------------------------
+# Main
+# ------------------------------------------------------------
+
+def main():
+    parser = argparse.ArgumentParser()
+
+    parser.add_argument(
+        "--withdraw",
+        type=int,
+    )
+
+    parser.add_argument(
+        "--room-offline",
+        type=int,
+    )
+
+    parser.add_argument(
+        "--panel-dropped",
+        type=int,
+    )
+
+    parser.add_argument(
+        "--delay-company",
+        nargs=2,
+        type=int,
+        metavar=("COMPANY_ID", "MINUTES"),
+    )
+
+    parser.add_argument(
+        "--view-log",
+        action="store_true",
+    )
+
+    args = parser.parse_args()
+
+    conn = get_connection()
+    cursor = conn.cursor(
+        dictionary=True
+    )
+
+    try:
+
+        changed = False
+
+        if args.withdraw is not None:
+            handle_withdrawal(
+                cursor,
+                args.withdraw,
+            )
+            changed = True
+
+        if args.room_offline is not None:
+            handle_room_offline(
+                cursor,
+                args.room_offline,
+            )
+            changed = True
+
+        if args.panel_dropped is not None:
+            handle_panel_drop(
+                cursor,
+                args.panel_dropped,
+            )
+            changed = True
+
+        if args.delay_company is not None:
+
+            company_id, delay_minutes = (
+                args.delay_company
+            )
+
+            if delay_minutes < 0:
+                raise ValueError(
+                    "Delay must be non-negative."
+                )
+
+            handle_company_delay(
+                cursor,
+                company_id,
+                delay_minutes,
+            )
+
+            changed = True
+
+        if changed:
+            conn.commit()
+            print(
+                "\nChanges committed to database."
+            )
+
+        if args.view_log or not changed:
+            view_log(cursor)
+
+    except Exception:
+        conn.rollback()
+        raise
+
+    finally:
+        cursor.close()
+        conn.close()
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Mirai Labs Real-Time Replanner")
-    parser.add_argument("--withdraw", type=int, help="Student ID who is withdrawing")
-    parser.add_argument("--room-offline", type=int, help="Room ID that became unavailable")
-    parser.add_argument("--panel-dropped", type=int, help="Panel ID that dropped out")
-    parser.add_argument("--delay-company", nargs=2, type=int, metavar=('COMPANY_ID', 'MINUTES'), help="Company ID and delay in minutes")
-    parser.add_argument("--view-log", action="store_true", help="View the replan log")
-    
-    args = parser.parse_args()
-    
-    conn = get_connection()
-    cursor = conn.cursor(dictionary=True)
-    
-    try:
-        if args.withdraw:
-            handle_student_withdrawal(cursor, args.withdraw)
-        if args.room_offline:
-            handle_room_unavailable(cursor, args.room_offline)
-        if args.panel_dropped:
-            handle_panel_dropped(cursor, args.panel_dropped)
-        if args.delay_company:
-            handle_company_delay(cursor, args.delay_company[0], args.delay_company[1])
-            
-        if any([args.withdraw, args.room_offline, args.panel_dropped, args.delay_company]):
-            conn.commit()
-            print("Changes committed to database.")
-            
-        if args.view_log or not any(vars(args).values()):
-            view_replan_log(cursor)
-            
-    except Exception as e:
-        conn.rollback()
-        print(f"Replanning failed, rolled back: {e}")
-    finally:
-        cursor.close()
-        conn.close()    
+    main()
