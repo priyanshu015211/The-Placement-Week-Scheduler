@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useState } from "react";
 import {
   Bell,
   Search,
@@ -27,14 +27,12 @@ import {
   getRooms,
   getPanels,
   getReplanLog,
-  getStudents,
-  getCompanies,
-  getMetrics,
   delayCompany,
   dropPanel,
   offlineRoom,
   withdrawStudent,
 } from "./api";
+
 export default function App() {
   const [activeTab, setActiveTab] = useState("overview");
   const [showReplanModal, setShowReplanModal] = useState(false);
@@ -42,33 +40,18 @@ export default function App() {
   const [interviews, setInterviews] = useState([]);
   const [rooms, setRooms] = useState([]);
   const [panels, setPanels] = useState([]);
-  const [students, setStudents] = useState([]);
-  const [companies, setCompanies] = useState([]);
-  const [metrics, setMetrics] = useState(null);
   const [replanLog, setReplanLog] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
 
-  async function loadData() {
+  async function loadCoreData() {
     try {
       setError("");
-      const [
-        dash,
-        interviewRows,
-        roomRows,
-        panelRows,
-        studentRows,
-        companyRows,
-        metricData,
-        logRows,
-      ] = await Promise.all([
+      const [dash, interviewRows, roomRows, panelRows, logRows] = await Promise.all([
         getDashboard(),
         getInterviews(),
         getRooms(),
         getPanels(),
-        getStudents(),
-        getCompanies(),
-        getMetrics(),
         getReplanLog(),
       ]);
 
@@ -76,20 +59,37 @@ export default function App() {
       setInterviews(interviewRows);
       setRooms(roomRows);
       setPanels(panelRows);
-      setStudents(studentRows);
-      setCompanies(companyRows);
-      setMetrics(metricData);
       setReplanLog(logRows);
     } catch (err) {
-      setError(err.message || "Failed to load dashboard data.");
+      setError(err.message || "Failed to load live dashboard data.");
     } finally {
       setLoading(false);
     }
   }
 
+  async function loadReferenceData() {
+    try {
+      const [studentRows, companyRows, metricData] = await Promise.all([
+        getStudents(),
+        getCompanies(),
+        getMetrics(),
+      ]);
+
+      setStudents(studentRows);
+      setCompanies(companyRows);
+      setMetrics(metricData);
+    } catch (err) {
+      setError(err.message || "Failed to load reference data.");
+    }
+  }
+
+  async function loadAllData() {
+    await Promise.all([loadCoreData(), loadReferenceData()]);
+  }
+
   useEffect(() => {
-    loadData();
-    const timer = setInterval(loadData, 30000);
+    loadAllData();
+    const timer = setInterval(loadCoreData, 15000);
     return () => clearInterval(timer);
   }, []);
 
@@ -99,7 +99,7 @@ export default function App() {
 
   return (
     <div className="flex h-screen bg-[var(--background)] text-[var(--foreground)] font-sans antialiased">
-      <Sidebar activeTab={activeTab} setActiveTab={setActiveTab} />
+      <Sidebar activeTab={activeTab} setActiveTab={setActiveTab} dashboard={dashboard} />
 
       <div className="flex-1 flex flex-col h-screen overflow-hidden">
         <TopBar />
@@ -137,19 +137,15 @@ export default function App() {
               {activeTab === "rooms" && <RoomsPage rooms={rooms} />}
               {activeTab === "panels" && <PanelsPage panels={panels} />}
               {activeTab === "history" && <HistoryPage logs={replanLog} />}
-
               {activeTab === "students" && <StudentsPage students={students} />}
-
               {activeTab === "companies" && (
                 <CompaniesPage companies={companies} />
               )}
-
               {activeTab === "disruptions" && (
                 <DisruptionsPage
                   onTriggerReplan={() => setShowReplanModal(true)}
                 />
               )}
-
               {activeTab === "metrics" && <MetricsPage metrics={metrics} />}
             </>
           )}
@@ -157,19 +153,13 @@ export default function App() {
       </div>
 
       {showReplanModal && (
-        <ReplanModal onClose={closeReplan} onCompleted={loadData} />
+        <ReplanModal
+          onClose={closeReplan}
+          onCompleted={loadAllData}
+        />
       )}
     </div>
   );
-}
-
-function navLabel(tab) {
-  return {
-    students: "Students",
-    companies: "Companies",
-    disruptions: "Disruptions",
-    metrics: "Metrics",
-  }[tab];
 }
 
 function LoadingState() {
@@ -180,7 +170,7 @@ function LoadingState() {
   );
 }
 
-function Sidebar({ activeTab, setActiveTab }) {
+function Sidebar({ activeTab, setActiveTab, dashboard }) {
   const navItems = [
     { id: "overview", label: "Overview", icon: LayoutDashboard },
     { id: "schedule", label: "Live Schedule", icon: CalendarDays },
@@ -228,8 +218,8 @@ function Sidebar({ activeTab, setActiveTab }) {
 
       <div className="space-y-4 border-t border-slate-800/60 p-4 text-sm">
         <div className="flex items-center text-xs font-medium text-green-400">
-          <div className="mr-2 h-2 w-2 rounded-full bg-green-500" />
-          All systems operational
+          <div className={`mr-2 h-2 w-2 rounded-full ${dashboard?.rooms_offline || dashboard?.hard_conflicts ? "bg-amber-500" : "bg-green-500"}`} />
+          {dashboard?.rooms_offline ? `${dashboard.rooms_offline} room(s) offline` : "All systems operational"}
         </div>
 
         <div className="flex items-center text-slate-300">
@@ -238,7 +228,7 @@ function Sidebar({ activeTab, setActiveTab }) {
           </div>
           <div className="flex-1 overflow-hidden">
             <div className="truncate font-medium text-white">Priyanshu</div>
-            <div className="truncate text-xs text-slate-500">Coordinator</div>
+            <div className="truncate text-xs text-slate-500">Placement Coordinator</div>
           </div>
           <Settings className="h-4 w-4 cursor-pointer text-slate-500 hover:text-white" />
         </div>
@@ -270,7 +260,7 @@ function TopBar() {
         </div>
       </div>
 
-      <div className="flex flex-1 items-center justify-end text-sm font-medium text-slate-600">
+      <div className="flex flex-1 items-center justify-end space-x-5 text-sm font-medium text-slate-600">
         <button className="relative text-slate-400 hover:text-slate-600">
           <Bell className="h-5 w-5" />
           <span className="absolute right-0 top-0 h-2 w-2 rounded-full border border-white bg-red-500" />
@@ -291,9 +281,10 @@ function OverviewTab({
   const scheduled = dashboard?.scheduled ?? 0;
   const studentsServed = dashboard?.students_served ?? 0;
   const companies = dashboard?.companies ?? 0;
-  const roomCount = dashboard?.rooms ?? rooms.length ?? 0;
-
-  const currentConflicts = dashboard?.conflicts ?? 0;
+  const roomsTotal = dashboard?.rooms_total ?? rooms.length ?? 0;
+  const roomsOperational = dashboard?.rooms_operational ?? 0;
+  const roomsOffline = dashboard?.rooms_offline ?? 0;
+  const currentConflicts = dashboard?.hard_conflicts ?? 0;
 
   return (
     <div className="mx-auto max-w-[1600px] space-y-6">
@@ -308,10 +299,7 @@ function OverviewTab({
         </div>
 
         <div className="flex space-x-3">
-          <button
-            onClick={() => setActiveTab("schedule")}
-            className="border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 shadow-sm hover:bg-slate-50"
-          >
+          <button className="border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 shadow-sm hover:bg-slate-50">
             View Full Schedule
           </button>
           <button
@@ -342,8 +330,9 @@ function OverviewTab({
         />
         <KPICard
           title="Rooms"
-          value={`${roomCount}`}
-          subtext="Configured rooms"
+          value={`${roomsOperational} / ${roomsTotal}`}
+          subtext={roomsOffline ? `${roomsOffline} offline` : "All operational"}
+          status={roomsOffline ? "warning" : "healthy"}
         />
         <KPICard
           title="Conflicts"
@@ -389,8 +378,8 @@ function KPICard({ title, value, subtext, status }) {
               status === "healthy"
                 ? "bg-green-500"
                 : status === "warning"
-                  ? "bg-amber-500"
-                  : "bg-red-500"
+                ? "bg-amber-500"
+                : "bg-red-500"
             }`}
           />
         )}
@@ -430,8 +419,12 @@ function LiveSchedule({ interviews }) {
 
           <tbody className="divide-y divide-slate-100 font-mono">
             {rows.map((row) => {
-              const start = row.start_time ? new Date(row.start_time) : null;
-              const end = row.end_time ? new Date(row.end_time) : null;
+              const start = row.start_time
+                ? new Date(row.start_time)
+                : null;
+              const end = row.end_time
+                ? new Date(row.end_time)
+                : null;
 
               return (
                 <tr key={row.id} className="hover:bg-slate-50">
@@ -515,14 +508,13 @@ function NeedsAttention({ replanLog, onTriggerReplan }) {
             Recent Replan Activity
           </div>
           {recent.length === 0 ? (
-            <div className="text-sm text-slate-500">No recent replans.</div>
+            <div className="text-sm text-slate-500">
+              No recent replans.
+            </div>
           ) : (
             <div className="space-y-2">
               {recent.map((item) => (
-                <div
-                  key={item.id}
-                  className="border-t border-slate-100 pt-2 text-xs"
-                >
+                <div key={item.id} className="border-t border-slate-100 pt-2 text-xs">
                   <div className="font-medium text-slate-800">
                     Interview {item.interview_id}
                   </div>
@@ -538,24 +530,28 @@ function NeedsAttention({ replanLog, onTriggerReplan }) {
 }
 
 function ResourceStatus({ rooms, panels }) {
-  const roomPreview = rooms.slice(0, 8);
-  const panelMap = new Map();
+  const roomPreview = [...rooms]
+    .sort((a, b) => {
+      const rank = (room) => {
+        if (room.status === "offline") return 0;
+        if (Number(room.scheduled_interviews || 0) > 0) return 1;
+        return 2;
+      };
+      return rank(a) - rank(b) || Number(a.id) - Number(b.id);
+    })
+    .slice(0, 8);
 
+  const panelMap = new Map();
   panels.forEach((panel) => {
     const key = panel.company_name || `Company ${panel.company_id}`;
     if (!panelMap.has(key)) {
-      panelMap.set(key, { total: 0, available: 0 });
+      panelMap.set(key, { total: 0, available: 0, unavailable: 0 });
     }
-
     const entry = panelMap.get(key);
     entry.total += 1;
-
-    if (panel.status === "available") {
-      entry.available += 1;
-    }
+    if (panel.status === "available") entry.available += 1;
+    else entry.unavailable += 1;
   });
-
-  const panelPreview = Array.from(panelMap.entries()).slice(0, 8);
 
   return (
     <div className="grid grid-cols-2 gap-4">
@@ -565,25 +561,19 @@ function ResourceStatus({ rooms, panels }) {
             Room Status
           </h3>
         </div>
-
         <div className="max-h-[220px] space-y-2 overflow-y-auto p-3 font-mono text-sm">
           {roomPreview.map((room) => {
-            const inUse = Number(room.scheduled_interviews || 0) > 0;
-
+            const offline = room.status === "offline";
+            const inUse = !offline && Number(room.scheduled_interviews || 0) > 0;
+            const label = offline ? "Offline" : inUse ? "In use" : "Available";
+            const color = offline ? "text-red-600" : inUse ? "text-blue-600" : "text-green-600";
+            const dot = offline ? "bg-red-500" : inUse ? "bg-blue-500" : "bg-green-500";
             return (
               <div key={room.id} className="flex items-center justify-between">
                 <span className="text-slate-600">{room.name}</span>
-                <span
-                  className={`flex items-center text-xs ${
-                    inUse ? "text-blue-600" : "text-green-600"
-                  }`}
-                >
-                  <span
-                    className={`mr-1.5 h-1.5 w-1.5 rounded-full ${
-                      inUse ? "bg-blue-500" : "bg-green-500"
-                    }`}
-                  />
-                  {inUse ? "In use" : "Available"}
+                <span className={`flex items-center text-xs ${color}`}>
+                  <span className={`mr-1.5 h-1.5 w-1.5 rounded-full ${dot}`} />
+                  {label}
                 </span>
               </div>
             );
@@ -597,20 +587,11 @@ function ResourceStatus({ rooms, panels }) {
             Panel Status
           </h3>
         </div>
-
         <div className="max-h-[220px] space-y-2 overflow-y-auto p-3 font-mono text-sm">
-          {panelPreview.map(([company, stat]) => (
+          {Array.from(panelMap.entries()).slice(0, 8).map(([company, stat]) => (
             <div key={company} className="flex items-center justify-between">
               <span className="truncate pr-2 text-slate-600">{company}</span>
-              <span
-                className={`text-xs font-semibold ${
-                  stat.available === stat.total
-                    ? "text-green-600"
-                    : stat.available > 0
-                      ? "text-amber-600"
-                      : "text-red-600"
-                }`}
-              >
+              <span className={`text-xs font-semibold ${stat.unavailable ? "text-amber-600" : "text-green-600"}`}>
                 {stat.available}/{stat.total} available
               </span>
             </div>
@@ -629,30 +610,22 @@ function UpcomingInterviews({ interviews }) {
   return (
     <div className="flex flex-col border border-slate-200 bg-white shadow-sm">
       <div className="flex items-center justify-between border-b border-slate-200 p-3">
-        <h3 className="font-semibold text-slate-900">Next 60 Minutes</h3>
-
+        <h3 className="font-semibold text-slate-900">Next Scheduled Interviews</h3>
         <span className="text-xs text-slate-500">{upcoming.length} shown</span>
       </div>
-
       <div className="divide-y divide-slate-100 font-mono text-xs">
         {upcoming.map((row) => (
           <div key={row.id} className="flex items-center p-3 hover:bg-slate-50">
-            <div className="w-14 font-bold text-slate-900">
-              {formatTime(new Date(row.start_time))}
-            </div>
-
+            <div className="w-14 font-bold text-slate-900">{formatTime(new Date(row.start_time))}</div>
             <div className="flex-1">
-              <div className="font-medium text-slate-900">
-                {row.student_name || `Student ${row.student_id}`}
-              </div>
-
-              <div className="text-slate-500">
-                {row.company_name} • {row.room_name || `Room ${row.room_id}`} •{" "}
-                Panel {row.panel_id}
-              </div>
+              <div className="font-medium text-slate-900">{row.student_name || `Student ${row.student_id}`}</div>
+              <div className="text-slate-500">{row.company_name} • {row.room_name || `Room ${row.room_id ?? "-"}`} • Panel {row.panel_id ?? "-"}</div>
             </div>
           </div>
         ))}
+        {upcoming.length === 0 && (
+          <div className="p-4 text-center text-slate-500">No scheduled interviews available.</div>
+        )}
       </div>
     </div>
   );
@@ -695,17 +668,17 @@ function RoomsPage({ rooms }) {
       <div className="grid grid-cols-2 gap-4 md:grid-cols-4">
         {rooms.map((room) => {
           const count = Number(room.scheduled_interviews || 0);
+          const offline = room.status === "offline";
+          const inUse = !offline && count > 0;
           return (
-            <div
-              key={room.id}
-              className="border border-slate-200 bg-white p-4 shadow-sm"
-            >
-              <div className="text-sm font-semibold text-slate-900">
-                {room.name}
+            <div key={room.id} className="border border-slate-200 bg-white p-4 shadow-sm">
+              <div className="flex items-center justify-between">
+                <div className="text-sm font-semibold text-slate-900">{room.name}</div>
+                <span className={`text-xs font-semibold ${offline ? "text-red-600" : inUse ? "text-blue-600" : "text-green-600"}`}>
+                  {offline ? "Offline" : inUse ? "In use" : "Available"}
+                </span>
               </div>
-              <div className="mt-2 text-xs text-slate-500">
-                {count} scheduled interviews
-              </div>
+              <div className="mt-2 text-xs text-slate-500">{count} scheduled interviews</div>
             </div>
           );
         })}
@@ -795,177 +768,13 @@ function PageHeader({ title }) {
       <h2 className="text-2xl font-bold tracking-tight text-slate-900">
         {title}
       </h2>
-      <p className="mt-1 text-sm text-slate-500">Live placement operations</p>
+      <p className="mt-1 text-sm text-slate-500">
+        Live placement operations
+      </p>
     </div>
   );
 }
 
-function PlaceholderPage({ title }) {
-  return (
-    <div className="flex min-h-[500px] items-center justify-center">
-      <div className="text-center">
-        <div className="mb-2 text-lg font-semibold text-slate-900">{title}</div>
-        <div className="text-sm text-slate-500">
-          This section will be connected to the backend next.
-        </div>
-      </div>
-    </div>
-  );
-}
-
-function StudentsPage({ students }) {
-  return (
-    <div className="space-y-5">
-      <PageHeader title="Students" />
-
-      <div className="overflow-hidden border border-slate-200 bg-white shadow-sm">
-        <table className="w-full text-left text-sm">
-          <thead className="border-b border-slate-200 bg-slate-50 text-xs uppercase text-slate-500">
-            <tr>
-              <th className="px-4 py-3">ID</th>
-              <th className="px-4 py-3">Name</th>
-              <th className="px-4 py-3">CGPA</th>
-              <th className="px-4 py-3">Branch</th>
-              <th className="px-4 py-3">Shortlisted</th>
-              <th className="px-4 py-3">Scheduled</th>
-              <th className="px-4 py-3">Status</th>
-            </tr>
-          </thead>
-
-          <tbody className="divide-y divide-slate-100">
-            {students.map((student) => (
-              <tr key={student.id} className="hover:bg-slate-50">
-                <td className="px-4 py-3 font-mono">{student.id}</td>
-
-                <td className="px-4 py-3 font-medium text-slate-900">
-                  {student.name}
-                </td>
-
-                <td className="px-4 py-3">{Number(student.cgpa).toFixed(2)}</td>
-
-                <td className="px-4 py-3">{student.branch}</td>
-
-                <td className="px-4 py-3">{student.shortlisted_companies}</td>
-
-                <td className="px-4 py-3">{student.scheduled_interviews}</td>
-
-                <td className="px-4 py-3">
-                  <StatusBadge status={student.status} />
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
-    </div>
-  );
-}
-function CompaniesPage({ companies }) {
-  return (
-    <div className="space-y-5">
-      <PageHeader title="Companies" />
-
-      <div className="overflow-hidden border border-slate-200 bg-white shadow-sm">
-        <table className="w-full text-left text-sm">
-          <thead className="border-b border-slate-200 bg-slate-50 text-xs uppercase text-slate-500">
-            <tr>
-              <th className="px-4 py-3">Company</th>
-              <th className="px-4 py-3">Tier</th>
-              <th className="px-4 py-3">Day</th>
-              <th className="px-4 py-3">Panels</th>
-              <th className="px-4 py-3">Shortlisted</th>
-              <th className="px-4 py-3">Scheduled</th>
-            </tr>
-          </thead>
-
-          <tbody className="divide-y divide-slate-100">
-            {companies.map((company) => (
-              <tr key={company.id} className="hover:bg-slate-50">
-                <td className="px-4 py-3 font-medium text-slate-900">
-                  {company.name}
-                </td>
-
-                <td className="px-4 py-3">Tier {company.priority_tier}</td>
-
-                <td className="px-4 py-3">Day {company.placement_day}</td>
-
-                <td className="px-4 py-3">
-                  {company.actual_panels}/{company.panels}
-                </td>
-
-                <td className="px-4 py-3">{company.shortlisted}</td>
-
-                <td className="px-4 py-3">{company.scheduled}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
-    </div>
-  );
-}
-function MetricsPage({ metrics }) {
-  if (!metrics) {
-    return <LoadingState />;
-  }
-
-  return (
-    <div className="space-y-5">
-      <PageHeader title="Metrics" />
-
-      <div className="grid grid-cols-2 gap-4 md:grid-cols-4">
-        <KPICard
-          title="Scheduled"
-          value={metrics.scheduled.toLocaleString()}
-          subtext={`${metrics.scheduling_rate.toFixed(2)}% scheduling rate`}
-        />
-
-        <KPICard
-          title="Unscheduled"
-          value={metrics.unscheduled.toLocaleString()}
-          subtext="Shortlist entries not scheduled"
-        />
-
-        <KPICard
-          title="Students Served"
-          value={metrics.students_served.toLocaleString()}
-          subtext="Students with interviews"
-        />
-
-        <KPICard
-          title="Avg Interviews"
-          value={metrics.average_interviews.toFixed(2)}
-          subtext={`Maximum: ${metrics.maximum_interviews}`}
-        />
-      </div>
-    </div>
-  );
-}
-function DisruptionsPage({ onTriggerReplan }) {
-  return (
-    <div className="space-y-5">
-      <PageHeader title="Disruptions" />
-
-      <div className="border border-slate-200 bg-white p-6 shadow-sm">
-        <h3 className="text-lg font-semibold text-slate-900">
-          Live disruption control
-        </h3>
-
-        <p className="mt-2 text-sm text-slate-500">
-          Apply a company delay, panel drop, room outage, or student withdrawal
-          without modifying the database manually.
-        </p>
-
-        <button
-          onClick={onTriggerReplan}
-          className="mt-5 bg-red-600 px-4 py-2 text-sm font-medium text-white hover:bg-red-700"
-        >
-          Trigger Replan
-        </button>
-      </div>
-    </div>
-  );
-}
 function ReplanModal({ onClose, onCompleted }) {
   const [step, setStep] = useState(1);
   const [type, setType] = useState("company-delay");
@@ -1010,7 +819,9 @@ function ReplanModal({ onClose, onCompleted }) {
       <div className="flex max-h-[90vh] w-full max-w-2xl flex-col border border-slate-200 bg-white shadow-2xl">
         <div className="flex shrink-0 items-center justify-between border-b border-slate-200 bg-slate-50 px-6 py-4">
           <div>
-            <h2 className="text-lg font-bold text-slate-900">Trigger Replan</h2>
+            <h2 className="text-lg font-bold text-slate-900">
+              Trigger Replan
+            </h2>
             <p className="mt-0.5 font-mono text-xs text-slate-500">
               STEP {step} OF 4
             </p>
@@ -1148,14 +959,18 @@ function ReplanModal({ onClose, onCompleted }) {
 
           {step === 3 && (
             <div className="space-y-5">
-              <h3 className="font-semibold text-slate-900">Confirm Replan</h3>
+              <h3 className="font-semibold text-slate-900">
+                Confirm Replan
+              </h3>
 
               <div className="border border-slate-200 bg-slate-50 p-4 text-sm text-slate-700">
                 <div className="font-medium text-slate-900">
                   {type === "company-delay" &&
                     `Company ${companyId} delayed by ${delayMinutes} minutes`}
-                  {type === "panel-drop" && `Panel ${panelId} unavailable`}
-                  {type === "room-offline" && `Room ${roomId} unavailable`}
+                  {type === "panel-drop" &&
+                    `Panel ${panelId} unavailable`}
+                  {type === "room-offline" &&
+                    `Room ${roomId} unavailable`}
                   {type === "student-withdrawal" &&
                     `Student ${studentId} withdrawn`}
                 </div>
@@ -1180,7 +995,10 @@ function ReplanModal({ onClose, onCompleted }) {
 
               <div className="border border-slate-200 bg-slate-50 p-4">
                 <div className="grid grid-cols-2 gap-4 text-sm">
-                  <ResultItem label="Type" value={result?.type || type} />
+                  <ResultItem
+                    label="Type"
+                    value={result?.type || type}
+                  />
                   <ResultItem
                     label="Status"
                     value={result?.status || "completed"}
@@ -1200,6 +1018,14 @@ function ReplanModal({ onClose, onCompleted }) {
                   <ResultItem
                     label="Cancelled"
                     value={result?.cancelled ?? "See replan metrics"}
+                  />
+                  <ResultItem
+                    label="Max displacement"
+                    value={
+                      result?.maximum_displacement != null
+                        ? `${result.maximum_displacement} min`
+                        : "See replan metrics"
+                    }
                   />
                 </div>
               </div>

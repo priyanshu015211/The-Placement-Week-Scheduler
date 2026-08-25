@@ -10,134 +10,52 @@ async function request(path, options = {}) {
   });
 
   if (!response.ok) {
-    let message = "API request failed";
-
+    let message = `API request failed (${response.status})`;
     try {
       const data = await response.json();
       message = data.detail || message;
     } catch {
       // Keep the default message.
     }
-
     throw new Error(message);
   }
 
   return response.json();
 }
 
+export const getHealth = () => request("/api/health");
+export const getDashboard = () => request("/api/dashboard");
+export const getInterviews = () => request("/api/interviews");
+export const getRooms = () => request("/api/rooms");
+export const getPanels = () => request("/api/panels");
+export const getStudents = () => request("/api/students");
+export const getCompanies = () => request("/api/companies");
+export const getMetrics = () => request("/api/metrics");
+export const getReplanLog = () => request("/api/replan-log");
 
-// ============================================================
-// Dashboard
-// ============================================================
-
-export function getDashboard() {
-  return request("/api/dashboard");
-}
-
-
-// ============================================================
-// Schedule
-// ============================================================
-
-export function getInterviews() {
-  return request("/api/interviews");
-}
-
-
-// ============================================================
-// Rooms
-// ============================================================
-
-export function getRooms() {
-  return request("/api/rooms");
-}
-
-
-// ============================================================
-// Panels
-// ============================================================
-
-export function getPanels() {
-  return request("/api/panels");
-}
-
-
-// ============================================================
-// Students
-// ============================================================
-
-export function getStudents() {
-  return request("/api/students");
-}
-
-
-// ============================================================
-// Companies
-// ============================================================
-
-export function getCompanies() {
-  return request("/api/companies");
-}
-
-
-// ============================================================
-// Metrics
-// ============================================================
-
-export function getMetrics() {
-  return request("/api/metrics");
-}
-
-
-// ============================================================
-// Replan history
-// ============================================================
-
-export function getReplanLog() {
-  return request("/api/replan-log");
-}
-
-
-// ============================================================
-// Replanning actions
-// ============================================================
-
-export function delayCompany(companyId, delayMinutes) {
-  return request("/api/replan/company-delay", {
+export const delayCompany = (companyId, delayMinutes) =>
+  request("/api/replan/company-delay", {
     method: "POST",
     body: JSON.stringify({
       company_id: Number(companyId),
       delay_minutes: Number(delayMinutes),
     }),
   });
-}
 
-
-export function dropPanel(panelId) {
-  return request("/api/replan/panel-drop", {
+export const dropPanel = (panelId) =>
+  request("/api/replan/panel-drop", {
     method: "POST",
-    body: JSON.stringify({
-      panel_id: Number(panelId),
-    }),
+    body: JSON.stringify({ panel_id: Number(panelId) }),
   });
-}
 
-
-export function offlineRoom(roomId) {
-  return request("/api/replan/room-offline", {
+export const offlineRoom = (roomId) =>
+  request("/api/replan/room-offline", {
     method: "POST",
-    body: JSON.stringify({
-      room_id: Number(roomId),
-    }),
+    body: JSON.stringify({ room_id: Number(roomId) }),
   });
-}
 
-
-export function withdrawStudent(studentId) {
-  return request("/api/replan/withdraw", {
+export const withdrawStudent = (studentId) =>
+  request("/api/replan/withdraw", {
     method: "POST",
-    body: JSON.stringify({
-      student_id: Number(studentId),
-    }),
+    body: JSON.stringify({ student_id: Number(studentId) }),
   });
-}
