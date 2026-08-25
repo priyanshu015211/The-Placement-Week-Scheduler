@@ -130,7 +130,9 @@ export default function App() {
             break;
         }
       } else {
-        failures.push(`${names[index]}: ${result.reason?.message || "request failed"}`);
+        failures.push(
+          `${names[index]}: ${result.reason?.message || "request failed"}`,
+        );
       }
     });
 
@@ -189,7 +191,9 @@ export default function App() {
             break;
         }
       } else {
-        failures.push(`${names[index]}: ${result.reason?.message || "request failed"}`);
+        failures.push(
+          `${names[index]}: ${result.reason?.message || "request failed"}`,
+        );
       }
     });
 
@@ -214,7 +218,7 @@ export default function App() {
 
   async function handleRestoreBaseline() {
     const confirmed = window.confirm(
-      "Restore the saved baseline schedule? This will undo current replanning changes, clear replan history, and restore the saved room, panel, and student states."
+      "Restore the saved baseline schedule? This will undo current replanning changes, clear replan history, and restore the saved room, panel, and student states.",
     );
 
     if (!confirmed) return;
@@ -232,7 +236,9 @@ export default function App() {
 
   const placementDates = useMemo(() => {
     const dates = interviews
-      .map((row) => (row.start_time ? String(row.start_time).slice(0, 10) : null))
+      .map((row) =>
+        row.start_time ? String(row.start_time).slice(0, 10) : null,
+      )
       .filter(Boolean)
       .sort();
 
@@ -250,7 +256,7 @@ export default function App() {
       ? interviews.filter(
           (row) =>
             row.start_time &&
-            String(row.start_time).slice(0, 10) === selectedDate
+            String(row.start_time).slice(0, 10) === selectedDate,
         )
       : interviews;
 
@@ -282,17 +288,20 @@ export default function App() {
     : rooms.length > 0 &&
       panels.length > 0 &&
       rooms.every(
-        (room) => String(room.status || "").toLowerCase() !== "offline"
+        (room) => String(room.status || "").toLowerCase() !== "offline",
       ) &&
       panels.every(
-        (panel) => String(panel.status || "").toLowerCase() === "available"
+        (panel) => String(panel.status || "").toLowerCase() === "available",
       ) &&
       Number(dashboard.hard_conflicts || 0) === 0;
 
-
   return (
     <div className="flex h-screen bg-[var(--background)] text-[var(--foreground)] font-sans antialiased">
-      <Sidebar activeTab={activeTab} setActiveTab={setActiveTab} systemHealthy={systemHealthy} />
+      <Sidebar
+        activeTab={activeTab}
+        setActiveTab={setActiveTab}
+        systemHealthy={systemHealthy}
+      />
 
       <div className="relative flex flex-1 flex-col h-screen overflow-hidden">
         <TopBar
@@ -324,9 +333,7 @@ export default function App() {
             <div className="mb-5 flex items-start gap-3 border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800">
               <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
               <div className="flex-1">
-                <div className="font-semibold">
-                  Backend connection problem
-                </div>
+                <div className="font-semibold">Backend connection problem</div>
                 <div>{error}</div>
               </div>
 
@@ -364,9 +371,7 @@ export default function App() {
                 />
               )}
 
-              {activeTab === "students" && (
-                <StudentsPage students={students} />
-              )}
+              {activeTab === "students" && <StudentsPage students={students} />}
 
               {activeTab === "companies" && (
                 <CompaniesPage companies={companies} />
@@ -383,7 +388,10 @@ export default function App() {
               )}
 
               {activeTab === "history" && (
-                <HistoryPage logs={replanLog} onRestoreBaseline={handleRestoreBaseline} />
+                <HistoryPage
+                  logs={replanLog}
+                  onRestoreBaseline={handleRestoreBaseline}
+                />
               )}
 
               {activeTab === "metrics" && <MetricsPage metrics={metrics} />}
@@ -483,7 +491,16 @@ function Sidebar({ activeTab, setActiveTab, systemHealthy }) {
   );
 }
 
-function TopBar({ selectedDay, setSelectedDay, totalDays, placementDates, onOpenNotifications, notificationCount, searchQuery, onSearchChange }) {
+function TopBar({
+  selectedDay,
+  setSelectedDay,
+  totalDays,
+  placementDates,
+  onOpenNotifications,
+  notificationCount,
+  searchQuery,
+  onSearchChange,
+}) {
   return (
     <header className="z-10 flex h-14 shrink-0 items-center justify-between border-b border-[var(--border)] bg-white px-6">
       <div className="flex flex-1 items-center space-x-4">
@@ -503,7 +520,9 @@ function TopBar({ selectedDay, setSelectedDay, totalDays, placementDates, onOpen
 
               return (
                 <option key={day} value={day}>
-                  {date ? `Day ${day} — ${formatDateLabel(date)}` : `Day ${day}`}
+                  {date
+                    ? `Day ${day} — ${formatDateLabel(date)}`
+                    : `Day ${day}`}
                 </option>
               );
             })}
@@ -549,9 +568,7 @@ function NotificationPanel({ logs, onClose, onOpenHistory }) {
       <div className="flex items-center justify-between border-b border-slate-200 px-4 py-3">
         <div>
           <h3 className="font-semibold text-slate-900">Notifications</h3>
-          <p className="text-xs text-slate-500">
-            Recent scheduling activity
-          </p>
+          <p className="text-xs text-slate-500">Recent scheduling activity</p>
         </div>
 
         <button
@@ -624,10 +641,7 @@ function OverviewTab({
   const companies = dashboard?.companies ?? 0;
 
   const roomsTotal =
-    dashboard?.rooms_total ??
-    dashboard?.rooms ??
-    rooms.length ??
-    0;
+    dashboard?.rooms_total ?? dashboard?.rooms ?? rooms.length ?? 0;
 
   const roomsOperational =
     dashboard?.rooms_operational ??
@@ -700,7 +714,9 @@ function OverviewTab({
           title="Conflicts"
           value={`${conflicts}`}
           subtext={
-            conflicts === 0 ? "No detected hard conflicts" : "Review immediately"
+            conflicts === 0
+              ? "No detected hard conflicts"
+              : "Review immediately"
           }
           status={conflicts === 0 ? "healthy" : "critical"}
         />
@@ -742,8 +758,8 @@ function KPICard({ title, value, subtext, status }) {
               status === "healthy"
                 ? "bg-green-500"
                 : status === "warning"
-                ? "bg-amber-500"
-                : "bg-red-500"
+                  ? "bg-amber-500"
+                  : "bg-red-500"
             }`}
           />
         )}
@@ -763,11 +779,7 @@ function LiveSchedule({ interviews }) {
     return [
       "All Companies",
       ...Array.from(
-        new Set(
-          interviews
-            .map((row) => row.company_name)
-            .filter(Boolean)
-        )
+        new Set(interviews.map((row) => row.company_name).filter(Boolean)),
       ).sort(),
     ];
   }, [interviews]);
@@ -776,11 +788,7 @@ function LiveSchedule({ interviews }) {
     return [
       "All Rooms",
       ...Array.from(
-        new Set(
-          interviews
-            .map((row) => row.room_name)
-            .filter(Boolean)
-        )
+        new Set(interviews.map((row) => row.room_name).filter(Boolean)),
       ).sort(),
     ];
   }, [interviews]);
@@ -789,7 +797,7 @@ function LiveSchedule({ interviews }) {
     return [
       "All Status",
       ...Array.from(
-        new Set(interviews.map((row) => String(row.status || "scheduled")))
+        new Set(interviews.map((row) => String(row.status || "scheduled"))),
       ).sort(),
     ];
   }, [interviews]);
@@ -812,8 +820,7 @@ function LiveSchedule({ interviews }) {
       })
       .sort((a, b) => {
         return (
-          new Date(a.start_time).getTime() -
-          new Date(b.start_time).getTime()
+          new Date(a.start_time).getTime() - new Date(b.start_time).getTime()
         );
       });
   }, [interviews, companyFilter, roomFilter, statusFilter]);
@@ -967,9 +974,7 @@ function NeedsAttention({ replanLog, onTriggerReplan }) {
           </div>
 
           {recent.length === 0 ? (
-            <div className="text-sm text-slate-500">
-              No recent replans.
-            </div>
+            <div className="text-sm text-slate-500">No recent replans.</div>
           ) : (
             <div className="space-y-2">
               {recent.map((item) => (
@@ -1036,10 +1041,7 @@ function ResourceStatus({ rooms, panels }) {
               Number(room.scheduled_interviews || 0) > 0 && !offline;
 
             return (
-              <div
-                key={room.id}
-                className="flex items-center justify-between"
-              >
+              <div key={room.id} className="flex items-center justify-between">
                 <span className="text-slate-600">
                   {room.name || `Room-${String(room.id).padStart(2, "0")}`}
                 </span>
@@ -1049,8 +1051,8 @@ function ResourceStatus({ rooms, panels }) {
                     offline
                       ? "text-red-600"
                       : inUse
-                      ? "text-blue-600"
-                      : "text-green-600"
+                        ? "text-blue-600"
+                        : "text-green-600"
                   }`}
                 >
                   <span
@@ -1058,8 +1060,8 @@ function ResourceStatus({ rooms, panels }) {
                       offline
                         ? "bg-red-500"
                         : inUse
-                        ? "bg-blue-500"
-                        : "bg-green-500"
+                          ? "bg-blue-500"
+                          : "bg-green-500"
                     }`}
                   />
 
@@ -1084,10 +1086,7 @@ function ResourceStatus({ rooms, panels }) {
 
         <div className="max-h-[220px] space-y-2 overflow-y-auto p-3 font-mono text-sm">
           {panelPreview.map(([company, stat]) => (
-            <div
-              key={company}
-              className="flex items-center justify-between"
-            >
+            <div key={company} className="flex items-center justify-between">
               <span className="truncate pr-2 text-slate-600">{company}</span>
 
               <span
@@ -1095,8 +1094,8 @@ function ResourceStatus({ rooms, panels }) {
                   stat.available === stat.total
                     ? "text-green-600"
                     : stat.available > 0
-                    ? "text-amber-600"
-                    : "text-red-600"
+                      ? "text-amber-600"
+                      : "text-red-600"
                 }`}
               >
                 {stat.available}/{stat.total} available
@@ -1118,12 +1117,11 @@ function UpcomingInterviews({ interviews }) {
     .filter(
       (row) =>
         row.start_time &&
-        String(row.status || "scheduled").toLowerCase() === "scheduled"
+        String(row.status || "scheduled").toLowerCase() === "scheduled",
     )
     .sort(
       (a, b) =>
-        new Date(a.start_time).getTime() -
-        new Date(b.start_time).getTime()
+        new Date(a.start_time).getTime() - new Date(b.start_time).getTime(),
     )
     .slice(0, 5);
 
@@ -1134,17 +1132,12 @@ function UpcomingInterviews({ interviews }) {
           Next Scheduled Interviews
         </h3>
 
-        <span className="text-xs text-slate-500">
-          {upcoming.length} shown
-        </span>
+        <span className="text-xs text-slate-500">{upcoming.length} shown</span>
       </div>
 
       <div className="divide-y divide-slate-100 font-mono text-xs">
         {upcoming.map((row) => (
-          <div
-            key={row.id}
-            className="flex items-center p-3 hover:bg-slate-50"
-          >
+          <div key={row.id} className="flex items-center p-3 hover:bg-slate-50">
             <div className="w-14 font-bold text-slate-900">
               {formatTime(new Date(row.start_time))}
             </div>
@@ -1218,11 +1211,7 @@ function StudentsPage({ students }) {
   const [query, setQuery] = useState("");
 
   const filtered = students.filter((student) => {
-    const text = [
-      student.id,
-      student.name,
-      student.branch,
-    ]
+    const text = [student.id, student.name, student.branch]
       .join(" ")
       .toLowerCase();
 
@@ -1272,9 +1261,7 @@ function StudentsPage({ students }) {
                 </td>
 
                 <td className="px-4 py-3">
-                  {student.cgpa != null
-                    ? Number(student.cgpa).toFixed(2)
-                    : "-"}
+                  {student.cgpa != null ? Number(student.cgpa).toFixed(2) : "-"}
                 </td>
 
                 <td className="px-4 py-3">{student.branch || "-"}</td>
@@ -1296,7 +1283,8 @@ function StudentsPage({ students }) {
         </table>
 
         <div className="border-t border-slate-200 bg-slate-50 p-3 text-center text-xs text-slate-500">
-          Showing {Math.min(100, filtered.length)} of {filtered.length} matching students
+          Showing {Math.min(100, filtered.length)} of {filtered.length} matching
+          students
         </div>
       </div>
     </div>
@@ -1309,7 +1297,7 @@ function CompaniesPage({ companies }) {
   const filtered = companies.filter((company) =>
     String(company.name || "")
       .toLowerCase()
-      .includes(query.toLowerCase())
+      .includes(query.toLowerCase()),
   );
 
   return (
@@ -1366,13 +1354,9 @@ function CompaniesPage({ companies }) {
                   {company.panels ?? 0}
                 </td>
 
-                <td className="px-4 py-3">
-                  {company.shortlisted ?? 0}
-                </td>
+                <td className="px-4 py-3">{company.shortlisted ?? 0}</td>
 
-                <td className="px-4 py-3">
-                  {company.scheduled ?? 0}
-                </td>
+                <td className="px-4 py-3">{company.scheduled ?? 0}</td>
 
                 <td className="px-4 py-3">
                   {company.interview_duration_min ?? "-"} min
@@ -1389,15 +1373,11 @@ function CompaniesPage({ companies }) {
 function RoomsPage({ rooms }) {
   return (
     <div className="space-y-5">
-      <PageHeader
-        title="Rooms"
-        subtitle={`${rooms.length} configured rooms`}
-      />
+      <PageHeader title="Rooms" subtitle={`${rooms.length} configured rooms`} />
 
       <div className="grid grid-cols-2 gap-4 md:grid-cols-4">
         {rooms.map((room) => {
-          const offline =
-            String(room.status || "").toLowerCase() === "offline";
+          const offline = String(room.status || "").toLowerCase() === "offline";
 
           const count = Number(room.scheduled_interviews || 0);
 
@@ -1459,9 +1439,7 @@ function PanelsPage({ panels }) {
 
               return (
                 <tr key={panel.id}>
-                  <td className="px-4 py-3 font-mono">
-                    Panel {panel.id}
-                  </td>
+                  <td className="px-4 py-3 font-mono">Panel {panel.id}</td>
 
                   <td className="px-4 py-3">
                     {panel.company_name || `Company ${panel.company_id}`}
@@ -1546,7 +1524,9 @@ function ActionCard({ title, description, button, onClick, danger }) {
       <button
         onClick={onClick}
         className={`px-4 py-2 text-sm font-medium text-white ${
-          danger ? "bg-red-600 hover:bg-red-700" : "bg-slate-900 hover:bg-slate-800"
+          danger
+            ? "bg-red-600 hover:bg-red-700"
+            : "bg-slate-900 hover:bg-slate-800"
         }`}
       >
         {button}
@@ -1596,7 +1576,7 @@ function HistoryPage({ logs, onRestoreBaseline }) {
                     log.old_room_id,
                     log.old_panel_id,
                     log.old_start_time,
-                    log.old_end_time
+                    log.old_end_time,
                   )}
                 </td>
 
@@ -1606,7 +1586,7 @@ function HistoryPage({ logs, onRestoreBaseline }) {
                         log.new_room_id,
                         log.new_panel_id,
                         log.new_start_time,
-                        log.new_end_time
+                        log.new_end_time,
                       )
                     : "CANCELLED"}
                 </td>
@@ -1728,9 +1708,7 @@ function MetricsPage({ metrics }) {
         </div>
 
         <div className="border border-slate-200 bg-white p-5 shadow-sm">
-          <h3 className="font-semibold text-slate-900">
-            Replanning
-          </h3>
+          <h3 className="font-semibold text-slate-900">Replanning</h3>
 
           <div className="mt-4 space-y-3">
             <MetricRow
@@ -1823,10 +1801,7 @@ function ReplanModal({ onClose, onCompleted }) {
       let response;
 
       if (type === "company-delay") {
-        response = await delayCompany(
-          companyId,
-          delayMinutes
-        );
+        response = await delayCompany(companyId, delayMinutes);
       } else if (type === "panel-drop") {
         response = await dropPanel(panelId);
       } else if (type === "room-offline") {
@@ -1850,19 +1825,17 @@ function ReplanModal({ onClose, onCompleted }) {
     type === "company-delay"
       ? "Company Delay"
       : type === "panel-drop"
-      ? "Panel Unavailable"
-      : type === "room-offline"
-      ? "Room Unavailable"
-      : "Student Withdrawal";
+        ? "Panel Unavailable"
+        : type === "room-offline"
+          ? "Room Unavailable"
+          : "Student Withdrawal";
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 p-4 backdrop-blur-sm">
       <div className="flex max-h-[90vh] w-full max-w-2xl flex-col border border-slate-200 bg-white shadow-2xl">
         <div className="flex shrink-0 items-center justify-between border-b border-slate-200 bg-slate-50 px-6 py-4">
           <div>
-            <h2 className="text-lg font-bold text-slate-900">
-              Trigger Replan
-            </h2>
+            <h2 className="text-lg font-bold text-slate-900">Trigger Replan</h2>
 
             <p className="mt-0.5 font-mono text-xs text-slate-500">
               STEP {step} OF 4
@@ -1939,9 +1912,7 @@ function ReplanModal({ onClose, onCompleted }) {
           {step === 2 && (
             <div className="space-y-5">
               <div>
-                <h3 className="font-semibold text-slate-900">
-                  {title}
-                </h3>
+                <h3 className="font-semibold text-slate-900">{title}</h3>
 
                 <p className="mt-1 text-sm text-slate-500">
                   Enter the identifier used by the scheduler.
@@ -1982,9 +1953,7 @@ function ReplanModal({ onClose, onCompleted }) {
                     type="number"
                     value={panelId}
                     min="1"
-                    onChange={(event) =>
-                      setPanelId(Number(event.target.value))
-                    }
+                    onChange={(event) => setPanelId(Number(event.target.value))}
                     className="w-full border border-slate-300 p-2 text-sm outline-none focus:border-blue-500"
                   />
                 </FormField>
@@ -1996,9 +1965,7 @@ function ReplanModal({ onClose, onCompleted }) {
                     type="number"
                     value={roomId}
                     min="1"
-                    onChange={(event) =>
-                      setRoomId(Number(event.target.value))
-                    }
+                    onChange={(event) => setRoomId(Number(event.target.value))}
                     className="w-full border border-slate-300 p-2 text-sm outline-none focus:border-blue-500"
                   />
                 </FormField>
@@ -2022,18 +1989,14 @@ function ReplanModal({ onClose, onCompleted }) {
 
           {step === 3 && (
             <div className="space-y-5">
-              <h3 className="font-semibold text-slate-900">
-                Confirm Replan
-              </h3>
+              <h3 className="font-semibold text-slate-900">Confirm Replan</h3>
 
               <div className="border border-slate-200 bg-slate-50 p-4">
                 <div className="text-sm font-medium text-slate-900">
                   {type === "company-delay" &&
                     `Company ${companyId} delayed by ${delayMinutes} minutes`}
-                  {type === "panel-drop" &&
-                    `Panel ${panelId} unavailable`}
-                  {type === "room-offline" &&
-                    `Room ${roomId} unavailable`}
+                  {type === "panel-drop" && `Panel ${panelId} unavailable`}
+                  {type === "room-offline" && `Room ${roomId} unavailable`}
                   {type === "student-withdrawal" &&
                     `Student ${studentId} withdrawn`}
                 </div>
@@ -2042,9 +2005,9 @@ function ReplanModal({ onClose, onCompleted }) {
                   <Info className="mt-0.5 h-4 w-4 shrink-0" />
 
                   <span>
-                    The backend replanner will preserve unaffected
-                    interviews and only change appointments where a
-                    valid recovery is possible.
+                    The backend replanner will preserve unaffected interviews
+                    and only change appointments where a valid recovery is
+                    possible.
                   </span>
                 </div>
               </div>
@@ -2064,10 +2027,7 @@ function ReplanModal({ onClose, onCompleted }) {
                   value={result?.status || "completed"}
                 />
 
-                <ResultItem
-                  label="Type"
-                  value={result?.type || type}
-                />
+                <ResultItem label="Type" value={result?.type || type} />
 
                 <ResultItem
                   label="Affected"
@@ -2097,8 +2057,8 @@ function ReplanModal({ onClose, onCompleted }) {
               <div className="flex items-start gap-2 border border-blue-200 bg-blue-50 p-3 text-sm text-blue-800">
                 <Info className="mt-0.5 h-4 w-4 shrink-0" />
                 <span>
-                  Review Replan History for the complete OLD → NEW
-                  appointment diff.
+                  Review Replan History for the complete OLD → NEW appointment
+                  diff.
                 </span>
               </div>
             </div>
@@ -2184,9 +2144,7 @@ function DisruptionChoice({
         {title}
       </div>
 
-      <div className="text-sm text-slate-600">
-        {description}
-      </div>
+      <div className="text-sm text-slate-600">{description}</div>
     </button>
   );
 }
@@ -2209,16 +2167,17 @@ function ResultItem({ label, value }) {
         {label}
       </div>
 
-      <div className="mt-1 font-semibold text-slate-900">
-        {String(value)}
-      </div>
+      <div className="mt-1 font-semibold text-slate-900">{String(value)}</div>
     </div>
   );
 }
 
 function addDaysISO(isoDate, days) {
-  const date = new Date(`${isoDate}T00:00:00`);
-  date.setDate(date.getDate() + days);
+  const [year, month, day] = isoDate.split("-").map(Number);
+
+  const date = new Date(Date.UTC(year, month - 1, day));
+  date.setUTCDate(date.getUTCDate() + days);
+
   return date.toISOString().slice(0, 10);
 }
 
@@ -2226,16 +2185,19 @@ function formatDateLabel(isoDate) {
   if (!isoDate) return "";
 
   try {
-    const date = new Date(`${isoDate}T00:00:00`);
+    const [year, month, day] = isoDate.split("-").map(Number);
+
+    const date = new Date(Date.UTC(year, month - 1, day));
+
     return date.toLocaleDateString(undefined, {
       month: "short",
       day: "numeric",
+      timeZone: "UTC",
     });
   } catch {
     return isoDate;
   }
 }
-
 function formatTime(value) {
   if (!value) return "--:--";
 
@@ -2264,16 +2226,14 @@ function formatHistoryLocation(roomId, panelId, start, end) {
   if (!start) return "—";
 
   return `Rm ${roomId ?? "-"} • Pan ${panelId ?? "-"} • ${formatTime(
-    new Date(start)
+    new Date(start),
   )}-${end ? formatTime(new Date(end)) : "--:--"}`;
 }
 
 function durationText(start, end) {
   if (!start || !end) return "—";
 
-  const minutes = Math.round(
-    (end.getTime() - start.getTime()) / 60000
-  );
+  const minutes = Math.round((end.getTime() - start.getTime()) / 60000);
 
   return `${minutes} min`;
 }
