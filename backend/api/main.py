@@ -1,3 +1,5 @@
+from collections import defaultdict
+
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, Field
 
@@ -417,6 +419,90 @@ def metrics():
         scheduled = totals["scheduled"] or 0
         total = totals["total"] or 0
 
+        # Match evaluator.py definitions exactly:
+        # - rooms: 8 hours/day across 4 placement days per room
+        # - panels: 8 hours on their placement day per panel
+        # - waiting: gaps between consecutive same-day interviews per student
+        room_used = fetch_one(
+            cursor,
+            """
+            SELECT COALESCE(
+                SUM(TIMESTAMPDIFF(MINUTE, start_time, end_time)), 0
+            ) AS used_minutes
+            FROM interviews
+            WHERE status = 'scheduled'
+              AND room_id IS NOT NULL
+              AND start_time IS NOT NULL
+              AND end_time IS NOT NULL
+            """,
+        )["used_minutes"] or 0
+
+        room_count = fetch_one(
+            cursor,
+            "SELECT COUNT(*) AS count FROM rooms",
+        )["count"] or 0
+
+        room_available = room_count * 4 * 8 * 60
+        room_utilization = (
+            float(room_used) / room_available * 100
+            if room_available else 0.0
+        )
+
+        panel_used = fetch_one(
+            cursor,
+            """
+            SELECT COALESCE(
+                SUM(TIMESTAMPDIFF(MINUTE, start_time, end_time)), 0
+            ) AS used_minutes
+            FROM interviews
+            WHERE status = 'scheduled'
+              AND panel_id IS NOT NULL
+              AND start_time IS NOT NULL
+              AND end_time IS NOT NULL
+            """,
+        )["used_minutes"] or 0
+
+        panel_count = fetch_one(
+            cursor,
+            "SELECT COUNT(*) AS count FROM panels",
+        )["count"] or 0
+
+        panel_available = panel_count * 8 * 60
+        panel_utilization = (
+            float(panel_used) / panel_available * 100
+            if panel_available else 0.0
+        )
+
+        cursor.execute(
+            """
+            SELECT student_id, start_time, end_time
+            FROM interviews
+            WHERE status = 'scheduled'
+              AND start_time IS NOT NULL
+              AND end_time IS NOT NULL
+            ORDER BY student_id, start_time
+            """
+        )
+        scheduled_rows = cursor.fetchall()
+
+        by_student = defaultdict(list)
+        for row in scheduled_rows:
+            by_student[row["student_id"]].append(row)
+
+        waits = []
+        for student_rows in by_student.values():
+            for first, second in zip(student_rows, student_rows[1:]):
+                if first["start_time"].date() != second["start_time"].date():
+                    continue
+                wait_minutes = (
+                    second["start_time"] - first["end_time"]
+                ).total_seconds() / 60
+                if wait_minutes >= 0:
+                    waits.append(wait_minutes)
+
+        average_wait = sum(waits) / len(waits) if waits else 0.0
+        maximum_wait = max(waits) if waits else 0.0
+
         # Replan metrics are computed from the same replan_log that powers
         # the Replan History page. This keeps the Metrics page consistent
         # with the actual before/after changes recorded by the replanner.
@@ -494,6 +580,11 @@ def metrics():
             )["count"],
             "average_interviews": float(fairness["avg_interviews"] or 0),
             "maximum_interviews": fairness["max_interviews"] or 0,
+            "room_utilization": room_utilization,
+            "panel_utilization": panel_utilization,
+            "average_wait_minutes": average_wait,
+            "maximum_wait_minutes": maximum_wait,
+            "waiting_samples": len(waits),
             "replan_affected": replan_affected,
             "replan_repaired": replan["repaired"] or 0,
             "replan_cancelled": replan["cancelled"] or 0,
