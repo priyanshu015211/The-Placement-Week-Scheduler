@@ -11,51 +11,92 @@ async function request(path, options = {}) {
 
   if (!response.ok) {
     let message = `API request failed (${response.status})`;
+
     try {
       const data = await response.json();
-      message = data.detail || message;
+      message = data?.detail || data?.message || message;
     } catch {
-      // Keep the default message.
+      // Keep the HTTP status message when the response is not JSON.
     }
+
     throw new Error(message);
   }
 
   return response.json();
 }
 
-export const getHealth = () => request("/api/health");
-export const getDashboard = () => request("/api/dashboard");
-export const getInterviews = () => request("/api/interviews");
-export const getRooms = () => request("/api/rooms");
-export const getPanels = () => request("/api/panels");
-export const getStudents = () => request("/api/students");
-export const getCompanies = () => request("/api/companies");
-export const getMetrics = () => request("/api/metrics");
-export const getReplanLog = () => request("/api/replan-log");
+export function getDashboard() {
+  return request("/api/dashboard");
+}
 
-export const delayCompany = (companyId, delayMinutes) =>
-  request("/api/replan/company-delay", {
+export function getInterviews() {
+  return request("/api/interviews");
+}
+
+export function getRooms() {
+  return request("/api/rooms");
+}
+
+export function getPanels() {
+  return request("/api/panels");
+}
+
+export function getStudents() {
+  return request("/api/students");
+}
+
+export function getCompanies() {
+  return request("/api/companies");
+}
+
+export function getMetrics() {
+  return request("/api/metrics");
+}
+
+export function getReplanLog() {
+  return request("/api/replan-log");
+}
+
+export function delayCompany(companyId, delayMinutes) {
+  return request("/api/replan/company-delay", {
     method: "POST",
     body: JSON.stringify({
       company_id: Number(companyId),
       delay_minutes: Number(delayMinutes),
     }),
   });
+}
 
-export const dropPanel = (panelId) =>
-  request("/api/replan/panel-drop", {
+export function dropPanel(panelId) {
+  return request("/api/replan/panel-drop", {
     method: "POST",
-    body: JSON.stringify({ panel_id: Number(panelId) }),
+    body: JSON.stringify({
+      panel_id: Number(panelId),
+    }),
   });
+}
 
-export const offlineRoom = (roomId) =>
-  request("/api/replan/room-offline", {
+export function offlineRoom(roomId) {
+  return request("/api/replan/room-offline", {
     method: "POST",
-    body: JSON.stringify({ room_id: Number(roomId) }),
+    body: JSON.stringify({
+      room_id: Number(roomId),
+    }),
   });
+}
 
-export const withdrawStudent = (studentId) =>
-  request("/api/replan/withdraw", {
+export function withdrawStudent(studentId) {
+  return request("/api/replan/withdraw", {
     method: "POST",
-    body: JSON.stringify({ student_id: Number(studentId) }),
+    body: JSON.stringify({
+      student_id: Number(studentId),
+    }),
   });
+}
+
+export function restoreBaseline() {
+  return request("/api/replan/restore-baseline", {
+    method: "POST",
+    body: JSON.stringify({}),
+  });
+}

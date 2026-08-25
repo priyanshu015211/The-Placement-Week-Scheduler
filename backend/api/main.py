@@ -705,6 +705,156 @@ def withdraw(request: StudentWithdrawalRequest):
 
 
 # ---------------------------------------------------------
+# Restore baseline
+# ---------------------------------------------------------
+
+@app.post("/api/replan/restore-baseline")
+def restore_baseline():
+    """Restore the saved baseline without deleting interviews first.
+
+    The replan log references interviews with foreign keys, so the log is
+    cleared before the schedule is restored. Resource/student disruption
+    state is also reset to the baseline operating state used by this app.
+    """
+    conn = get_connection()
+    cursor = conn.cursor(dictionary=True)
+
+    try:
+        cursor.execute(
+            """
+            SELECT COUNT(*) AS count
+            FROM information_schema.tables
+            WHERE table_schema = DATABASE()
+              AND table_name = 'interviews_baseline'
+            """
+        )
+        table = cursor.fetchone()
+
+        if not table or not table["count"]:
+            raise HTTPException(
+                status_code=409,
+                detail="No saved baseline exists. Run: python replan_metrics.py --save-baseline"
+            )
+
+        baseline_count = fetch_one(
+            cursor,
+            "SELECT COUNT(*) AS count FROM interviews_baseline",
+        )["count"]
+
+        if not baseline_count:
+            raise HTTPException(
+                status_code=409,
+                detail="The saved baseline is empty. Run the scheduler and save a baseline first."
+            )
+
+        # replan_log has a foreign key to interviews, so clear it first.
+        cursor.execute("DELETE FROM replan_log")
+        cleared_logs = cursor.rowcount
+
+        # Restore every baseline row that still exists.
+        cursor.execute(
+            """
+            UPDATE interviews i
+            JOIN interviews_baseline b ON b.id = i.id
+            SET
+                i.student_id = b.student_id,
+                i.company_id = b.company_id,
+                i.room_id = b.room_id,
+                i.panel_id = b.panel_id,
+                i.start_time = b.start_time,
+                i.end_time = b.end_time,
+                i.status = b.status,
+                i.reason = b.reason
+            """
+        )
+        restored_existing = cursor.rowcount
+
+        # Re-add any baseline rows that are missing from the live table.
+        cursor.execute(
+            """
+            INSERT INTO interviews
+                (id, student_id, company_id, room_id, panel_id,
+                 start_time, end_time, status, reason)
+            SELECT
+                b.id, b.student_id, b.company_id, b.room_id, b.panel_id,
+                b.start_time, b.end_time, b.status, b.reason
+            FROM interviews_baseline b
+            LEFT JOIN interviews i ON i.id = b.id
+            WHERE i.id IS NULL
+            """
+        )
+        restored_missing = cursor.rowcount
+
+        # Remove any live rows that are not part of the saved baseline.
+        # This is safe after replan_log has been cleared.
+        cursor.execute(
+            """
+            DELETE i
+            FROM interviews i
+            LEFT JOIN interviews_baseline b ON b.id = i.id
+            WHERE b.id IS NULL
+            """
+        )
+        removed_extra = cursor.rowcount
+
+        # Reset operational disruption state to the baseline state.
+        cursor.execute("UPDATE rooms SET status = 'available'")
+        rooms_reset = cursor.rowcount
+
+        cursor.execute("UPDATE panels SET status = 'available'")
+        panels_reset = cursor.rowcount
+
+        cursor.execute("UPDATE students SET status = 'active'")
+        students_reset = cursor.rowcount
+
+        # Test disruption records are no longer relevant after a full restore.
+        cursor.execute(
+            """
+            SELECT COUNT(*) AS cnt
+            FROM information_schema.tables
+            WHERE table_schema = DATABASE()
+              AND table_name = 'disruptions'
+            """
+        )
+        has_disruptions = cursor.fetchone()["cnt"] > 0
+        disruptions_cleared = 0
+        if has_disruptions:
+            cursor.execute("DELETE FROM disruptions")
+            disruptions_cleared = cursor.rowcount
+
+        conn.commit()
+
+        return {
+            "status": "restored",
+            "restored_interviews": baseline_count,
+            "updated_existing": restored_existing,
+            "inserted_missing": restored_missing,
+            "removed_extra": removed_extra,
+            "baseline_interviews": baseline_count,
+            "removed_extra_interviews": removed_extra,
+            "cleared_replan_logs": cleared_logs,
+            "rooms_reset": rooms_reset,
+            "panels_reset": panels_reset,
+            "students_reset": students_reset,
+            "disruptions_cleared": disruptions_cleared,
+        }
+
+    except HTTPException:
+        conn.rollback()
+        raise
+    except Exception as exc:
+        conn.rollback()
+        raise HTTPException(
+            status_code=500,
+            detail=f"Baseline restore failed: {exc}",
+        ) from exc
+
+    finally:
+        cursor.close()
+        conn.close()
+
+
+# ---------------------------------------------------------
 # Replan log
 # ---------------------------------------------------------
 
