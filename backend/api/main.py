@@ -753,6 +753,11 @@ def restore_baseline():
             )
 
         restore_saved_baseline(cursor)
+
+        # Restore means a clean baseline state, so stale disruption records
+        # must not remain visible after the schedule has been restored.
+        cursor.execute("DELETE FROM disruptions")
+
         conn.commit()
 
         restored = fetch_one(
