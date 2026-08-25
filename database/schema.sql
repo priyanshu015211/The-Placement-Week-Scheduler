@@ -179,10 +179,34 @@ CREATE TABLE replan_log (
 -- 9–12. Baseline snapshot tables used by Restore Baseline.
 -- These are deliberately independent snapshots rather than foreign-keyed
 -- copies, so they remain restorable even when the live schedule changes.
-CREATE TABLE interviews_baseline LIKE interviews;
-CREATE TABLE rooms_baseline LIKE rooms;
-CREATE TABLE panels_baseline LIKE panels;
-CREATE TABLE students_baseline LIKE students;
+-- Keep these definitions aligned with backend/replan_metrics.py.
+CREATE TABLE interviews_baseline (
+    id INT PRIMARY KEY,
+    student_id INT NOT NULL,
+    company_id INT NOT NULL,
+    room_id INT NULL,
+    panel_id INT NULL,
+    start_time DATETIME NULL,
+    end_time DATETIME NULL,
+    status VARCHAR(20) NOT NULL,
+    reason VARCHAR(255) NULL,
+    saved_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+) ENGINE=InnoDB;
+
+CREATE TABLE rooms_baseline (
+    id INT PRIMARY KEY,
+    status VARCHAR(20) NOT NULL
+) ENGINE=InnoDB;
+
+CREATE TABLE panels_baseline (
+    id INT PRIMARY KEY,
+    status VARCHAR(20) NOT NULL
+) ENGINE=InnoDB;
+
+CREATE TABLE students_baseline (
+    id INT PRIMARY KEY,
+    status VARCHAR(20) NOT NULL
+) ENGINE=InnoDB;
 
 -- Performance indexes used by conflict checks and dashboard queries.
 CREATE INDEX idx_interviews_student_time
