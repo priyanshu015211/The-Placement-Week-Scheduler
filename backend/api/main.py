@@ -1,5 +1,5 @@
 from fastapi import FastAPI, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from db import get_connection
 from replanner import (
@@ -11,8 +11,61 @@ from replanner import (
 
 app = FastAPI(
     title="Placement Week Scheduler API",
-    version="1.0.0",
+    version="1.1.0",
 )
+
+
+# ---------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------
+
+def fetch_one(cursor, query, params=()):
+    cursor.execute(query, params)
+    return cursor.fetchone()
+
+
+def conflict_counts(cursor):
+    queries = {
+        "student_conflicts": """
+            SELECT COUNT(*) AS count
+            FROM interviews a
+            JOIN interviews b
+              ON a.id < b.id
+             AND a.student_id = b.student_id
+             AND a.status = 'scheduled'
+             AND b.status = 'scheduled'
+             AND a.start_time < b.end_time
+             AND b.start_time < a.end_time
+        """,
+        "room_conflicts": """
+            SELECT COUNT(*) AS count
+            FROM interviews a
+            JOIN interviews b
+              ON a.id < b.id
+             AND a.room_id = b.room_id
+             AND a.status = 'scheduled'
+             AND b.status = 'scheduled'
+             AND a.start_time < b.end_time
+             AND b.start_time < a.end_time
+        """,
+        "panel_conflicts": """
+            SELECT COUNT(*) AS count
+            FROM interviews a
+            JOIN interviews b
+              ON a.id < b.id
+             AND a.panel_id = b.panel_id
+             AND a.status = 'scheduled'
+             AND b.status = 'scheduled'
+             AND a.start_time < b.end_time
+             AND b.start_time < a.end_time
+        """,
+    }
+
+    result = {}
+    for key, query in queries.items():
+        result[key] = fetch_one(cursor, query)["count"]
+
+    return result
 
 
 # ---------------------------------------------------------
@@ -34,45 +87,65 @@ def dashboard():
     cursor = conn.cursor(dictionary=True)
 
     try:
-        cursor.execute("""
-            SELECT COUNT(*) AS scheduled
+        scheduled = fetch_one(
+            cursor,
+            """
+            SELECT COUNT(*) AS count
             FROM interviews
             WHERE status = 'scheduled'
-        """)
-        scheduled = cursor.fetchone()["scheduled"]
+            """,
+        )["count"]
 
-        cursor.execute("""
-            SELECT COUNT(DISTINCT student_id) AS students_served
+        students_served = fetch_one(
+            cursor,
+            """
+            SELECT COUNT(DISTINCT student_id) AS count
             FROM interviews
             WHERE status = 'scheduled'
-        """)
-        students_served = cursor.fetchone()["students_served"]
+            """,
+        )["count"]
 
-        cursor.execute("""
-            SELECT COUNT(*) AS companies
-            FROM companies
-        """)
-        companies = cursor.fetchone()["companies"]
+        companies = fetch_one(
+            cursor,
+            "SELECT COUNT(*) AS count FROM companies",
+        )["count"]
 
-        cursor.execute("""
-            SELECT COUNT(*) AS rooms
+        room_state = fetch_one(
+            cursor,
+            """
+            SELECT
+                COUNT(*) AS total,
+                SUM(status = 'available') AS operational,
+                SUM(status = 'offline') AS offline
             FROM rooms
-        """)
-        rooms = cursor.fetchone()["rooms"]
+            """,
+        )
 
-        cursor.execute("""
-            SELECT COUNT(*) AS panels
+        panel_state = fetch_one(
+            cursor,
+            """
+            SELECT
+                COUNT(*) AS total,
+                SUM(status = 'available') AS available,
+                SUM(status <> 'available') AS unavailable
             FROM panels
-            WHERE status = 'available'
-        """)
-        available_panels = cursor.fetchone()["panels"]
+            """,
+        )
+
+        conflicts = conflict_counts(cursor)
 
         return {
             "scheduled": scheduled,
             "students_served": students_served,
             "companies": companies,
-            "rooms": rooms,
-            "available_panels": available_panels,
+            "rooms_total": room_state["total"],
+            "rooms_operational": room_state["operational"] or 0,
+            "rooms_offline": room_state["offline"] or 0,
+            "panels_total": panel_state["total"],
+            "panels_available": panel_state["available"] or 0,
+            "panels_unavailable": panel_state["unavailable"] or 0,
+            **conflicts,
+            "hard_conflicts": sum(conflicts.values()),
         }
 
     finally:
@@ -90,7 +163,8 @@ def interviews():
     cursor = conn.cursor(dictionary=True)
 
     try:
-        cursor.execute("""
+        cursor.execute(
+            """
             SELECT
                 i.id,
                 i.student_id,
@@ -99,21 +173,26 @@ def interviews():
                 c.name AS company_name,
                 i.room_id,
                 r.name AS room_name,
+                r.status AS room_status,
                 i.panel_id,
+                p.status AS panel_status,
                 i.start_time,
                 i.end_time,
                 i.status,
                 i.reason
             FROM interviews i
             JOIN students s
-                ON s.id = i.student_id
+              ON s.id = i.student_id
             JOIN companies c
-                ON c.id = i.company_id
+              ON c.id = i.company_id
             LEFT JOIN rooms r
-                ON r.id = i.room_id
+              ON r.id = i.room_id
+            LEFT JOIN panels p
+              ON p.id = i.panel_id
             WHERE i.status = 'scheduled'
-            ORDER BY i.start_time
-        """)
+            ORDER BY i.start_time, i.id
+            """
+        )
 
         return cursor.fetchall()
 
@@ -132,18 +211,22 @@ def rooms():
     cursor = conn.cursor(dictionary=True)
 
     try:
-        cursor.execute("""
+        cursor.execute(
+            """
             SELECT
                 r.id,
                 r.name,
+                r.capacity,
+                r.status,
                 COUNT(i.id) AS scheduled_interviews
             FROM rooms r
             LEFT JOIN interviews i
-                ON i.room_id = r.id
-               AND i.status = 'scheduled'
-            GROUP BY r.id, r.name
+              ON i.room_id = r.id
+             AND i.status = 'scheduled'
+            GROUP BY r.id, r.name, r.capacity, r.status
             ORDER BY r.id
-        """)
+            """
+        )
 
         return cursor.fetchall()
 
@@ -162,7 +245,8 @@ def panels():
     cursor = conn.cursor(dictionary=True)
 
     try:
-        cursor.execute("""
+        cursor.execute(
+            """
             SELECT
                 p.id,
                 p.company_id,
@@ -172,10 +256,10 @@ def panels():
                 COUNT(i.id) AS scheduled_interviews
             FROM panels p
             JOIN companies c
-                ON c.id = p.company_id
+              ON c.id = p.company_id
             LEFT JOIN interviews i
-                ON i.panel_id = p.id
-               AND i.status = 'scheduled'
+              ON i.panel_id = p.id
+             AND i.status = 'scheduled'
             GROUP BY
                 p.id,
                 p.company_id,
@@ -183,9 +267,175 @@ def panels():
                 p.panel_number,
                 p.status
             ORDER BY p.company_id, p.panel_number
-        """)
+            """
+        )
 
         return cursor.fetchall()
+
+    finally:
+        cursor.close()
+        conn.close()
+
+
+# ---------------------------------------------------------
+# Students
+# ---------------------------------------------------------
+
+@app.get("/api/students")
+def students():
+    conn = get_connection()
+    cursor = conn.cursor(dictionary=True)
+
+    try:
+        cursor.execute(
+            """
+            SELECT
+                s.id,
+                s.name,
+                s.cgpa,
+                s.branch,
+                s.status,
+                COUNT(DISTINCT CASE
+                    WHEN i.status = 'scheduled' THEN i.id
+                END) AS scheduled_interviews,
+                COUNT(DISTINCT sl.company_id) AS shortlisted_companies
+            FROM students s
+            LEFT JOIN interviews i
+              ON i.student_id = s.id
+            LEFT JOIN shortlists sl
+              ON sl.student_id = s.id
+            GROUP BY
+                s.id,
+                s.name,
+                s.cgpa,
+                s.branch,
+                s.status
+            ORDER BY s.id
+            """
+        )
+
+        return cursor.fetchall()
+
+    finally:
+        cursor.close()
+        conn.close()
+
+
+# ---------------------------------------------------------
+# Companies
+# ---------------------------------------------------------
+
+@app.get("/api/companies")
+def companies():
+    conn = get_connection()
+    cursor = conn.cursor(dictionary=True)
+
+    try:
+        cursor.execute(
+            """
+            SELECT
+                c.id,
+                c.name,
+                c.priority_tier,
+                c.placement_day,
+                c.panels,
+                c.interview_duration_min,
+                c.arrival_time,
+                COUNT(DISTINCT sl.student_id) AS shortlisted,
+                COUNT(DISTINCT CASE
+                    WHEN i.status = 'scheduled' THEN i.id
+                END) AS scheduled,
+                COUNT(DISTINCT p.id) AS actual_panels,
+                COUNT(DISTINCT CASE
+                    WHEN p.status = 'available' THEN p.id
+                END) AS available_panels
+            FROM companies c
+            LEFT JOIN shortlists sl
+              ON sl.company_id = c.id
+            LEFT JOIN interviews i
+              ON i.company_id = c.id
+            LEFT JOIN panels p
+              ON p.company_id = c.id
+            GROUP BY
+                c.id,
+                c.name,
+                c.priority_tier,
+                c.placement_day,
+                c.panels,
+                c.interview_duration_min,
+                c.arrival_time
+            ORDER BY c.placement_day, c.priority_tier, c.id
+            """
+        )
+
+        return cursor.fetchall()
+
+    finally:
+        cursor.close()
+        conn.close()
+
+
+# ---------------------------------------------------------
+# Metrics
+# ---------------------------------------------------------
+
+@app.get("/api/metrics")
+def metrics():
+    conn = get_connection()
+    cursor = conn.cursor(dictionary=True)
+
+    try:
+        totals = fetch_one(
+            cursor,
+            """
+            SELECT
+                COUNT(*) AS total,
+                SUM(status = 'scheduled') AS scheduled,
+                SUM(status = 'unscheduled') AS unscheduled,
+                SUM(status = 'cancelled') AS cancelled
+            FROM interviews
+            """,
+        )
+
+        fairness = fetch_one(
+            cursor,
+            """
+            SELECT
+                MAX(x.cnt) AS max_interviews,
+                AVG(x.cnt) AS avg_interviews
+            FROM (
+                SELECT student_id, COUNT(*) AS cnt
+                FROM interviews
+                WHERE status = 'scheduled'
+                GROUP BY student_id
+            ) x
+            """,
+        )
+
+        conflicts = conflict_counts(cursor)
+
+        scheduled = totals["scheduled"] or 0
+        total = totals["total"] or 0
+
+        return {
+            "total_interviews": total,
+            "scheduled": scheduled,
+            "unscheduled": totals["unscheduled"] or 0,
+            "cancelled": totals["cancelled"] or 0,
+            "scheduling_rate": scheduled / total * 100 if total else 0,
+            "students_served": fetch_one(
+                cursor,
+                """
+                SELECT COUNT(DISTINCT student_id) AS count
+                FROM interviews
+                WHERE status = 'scheduled'
+                """,
+            )["count"],
+            "average_interviews": float(fairness["avg_interviews"] or 0),
+            "maximum_interviews": fairness["max_interviews"] or 0,
+            **conflicts,
+            "hard_conflicts": sum(conflicts.values()),
+        }
 
     finally:
         cursor.close()
@@ -198,7 +448,7 @@ def panels():
 
 class CompanyDelayRequest(BaseModel):
     company_id: int
-    delay_minutes: int
+    delay_minutes: int = Field(ge=0, le=480)
 
 
 class PanelDropRequest(BaseModel):
@@ -219,30 +469,17 @@ class StudentWithdrawalRequest(BaseModel):
 
 @app.post("/api/replan/company-delay")
 def company_delay(request: CompanyDelayRequest):
-    if request.delay_minutes < 0:
-        raise HTTPException(
-            status_code=400,
-            detail="Delay must be non-negative",
-        )
-
     conn = get_connection()
     cursor = conn.cursor(dictionary=True)
 
     try:
-        handle_company_delay(
+        result = handle_company_delay(
             cursor,
             request.company_id,
             request.delay_minutes,
         )
-
         conn.commit()
-
-        return {
-            "status": "completed",
-            "type": "company_delay",
-            "company_id": request.company_id,
-            "delay_minutes": request.delay_minutes,
-        }
+        return result
 
     except Exception:
         conn.rollback()
@@ -259,18 +496,9 @@ def panel_drop(request: PanelDropRequest):
     cursor = conn.cursor(dictionary=True)
 
     try:
-        handle_panel_drop(
-            cursor,
-            request.panel_id,
-        )
-
+        result = handle_panel_drop(cursor, request.panel_id)
         conn.commit()
-
-        return {
-            "status": "completed",
-            "type": "panel_drop",
-            "panel_id": request.panel_id,
-        }
+        return result
 
     except Exception:
         conn.rollback()
@@ -287,18 +515,9 @@ def room_offline(request: RoomOfflineRequest):
     cursor = conn.cursor(dictionary=True)
 
     try:
-        handle_room_offline(
-            cursor,
-            request.room_id,
-        )
-
+        result = handle_room_offline(cursor, request.room_id)
         conn.commit()
-
-        return {
-            "status": "completed",
-            "type": "room_offline",
-            "room_id": request.room_id,
-        }
+        return result
 
     except Exception:
         conn.rollback()
@@ -315,18 +534,9 @@ def withdraw(request: StudentWithdrawalRequest):
     cursor = conn.cursor(dictionary=True)
 
     try:
-        handle_withdrawal(
-            cursor,
-            request.student_id,
-        )
-
+        result = handle_withdrawal(cursor, request.student_id)
         conn.commit()
-
-        return {
-            "status": "completed",
-            "type": "student_withdrawal",
-            "student_id": request.student_id,
-        }
+        return result
 
     except Exception:
         conn.rollback()
@@ -347,162 +557,14 @@ def replan_log():
     cursor = conn.cursor(dictionary=True)
 
     try:
-        cursor.execute("""
+        cursor.execute(
+            """
             SELECT *
             FROM replan_log
             ORDER BY logged_at DESC, id DESC
-        """)
-
+            """
+        )
         return cursor.fetchall()
-
-    finally:
-        cursor.close()
-        conn.close()
-
-@app.get("/api/students")
-def students():
-    conn = get_connection()
-    cursor = conn.cursor(dictionary=True)
-
-    try:
-        cursor.execute("""
-            SELECT
-                s.id,
-                s.name,
-                s.cgpa,
-                s.branch,
-                s.status,
-                COUNT(DISTINCT CASE
-                    WHEN i.status = 'scheduled' THEN i.id
-                END) AS scheduled_interviews,
-                COUNT(DISTINCT sl.company_id) AS shortlisted_companies
-            FROM students s
-            LEFT JOIN interviews i
-                ON i.student_id = s.id
-            LEFT JOIN shortlists sl
-                ON sl.student_id = s.id
-            GROUP BY
-                s.id,
-                s.name,
-                s.cgpa,
-                s.branch,
-                s.status
-            ORDER BY s.id
-        """)
-
-        return cursor.fetchall()
-
-    finally:
-        cursor.close()
-        conn.close()
-
-
-@app.get("/api/companies")
-def companies():
-    conn = get_connection()
-    cursor = conn.cursor(dictionary=True)
-
-    try:
-        cursor.execute("""
-            SELECT
-                c.id,
-                c.name,
-                c.priority_tier,
-                c.placement_day,
-                c.panels,
-                c.interview_duration_min,
-                c.arrival_time,
-                COUNT(DISTINCT sl.student_id) AS shortlisted,
-                COUNT(DISTINCT CASE
-                    WHEN i.status = 'scheduled' THEN i.id
-                END) AS scheduled,
-                COUNT(DISTINCT p.id) AS actual_panels
-            FROM companies c
-            LEFT JOIN shortlists sl
-                ON sl.company_id = c.id
-            LEFT JOIN interviews i
-                ON i.company_id = c.id
-            LEFT JOIN panels p
-                ON p.company_id = c.id
-            GROUP BY
-                c.id,
-                c.name,
-                c.priority_tier,
-                c.placement_day,
-                c.panels,
-                c.interview_duration_min,
-                c.arrival_time
-            ORDER BY
-                c.placement_day,
-                c.priority_tier,
-                c.id
-        """)
-
-        return cursor.fetchall()
-
-    finally:
-        cursor.close()
-        conn.close()
-
-
-@app.get("/api/metrics")
-def metrics():
-    conn = get_connection()
-    cursor = conn.cursor(dictionary=True)
-
-    try:
-        cursor.execute("""
-            SELECT COUNT(*) AS total
-            FROM interviews
-        """)
-        total = cursor.fetchone()["total"]
-
-        cursor.execute("""
-            SELECT COUNT(*) AS scheduled
-            FROM interviews
-            WHERE status = 'scheduled'
-        """)
-        scheduled = cursor.fetchone()["scheduled"]
-
-        cursor.execute("""
-            SELECT COUNT(DISTINCT student_id) AS students_served
-            FROM interviews
-            WHERE status = 'scheduled'
-        """)
-        students_served = cursor.fetchone()["students_served"]
-
-        cursor.execute("""
-            SELECT
-                MAX(x.cnt) AS max_interviews,
-                AVG(x.cnt) AS avg_interviews
-            FROM (
-                SELECT
-                    student_id,
-                    COUNT(*) AS cnt
-                FROM interviews
-                WHERE status = 'scheduled'
-                GROUP BY student_id
-            ) x
-        """)
-        fairness = cursor.fetchone()
-
-        return {
-            "total_interviews": total,
-            "scheduled": scheduled,
-            "unscheduled": total - scheduled,
-            "scheduling_rate": (
-                scheduled / total * 100
-                if total
-                else 0
-            ),
-            "students_served": students_served,
-            "average_interviews": float(
-                fairness["avg_interviews"] or 0
-            ),
-            "maximum_interviews": (
-                fairness["max_interviews"] or 0
-            ),
-        }
 
     finally:
         cursor.close()
