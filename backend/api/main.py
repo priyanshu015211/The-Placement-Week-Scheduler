@@ -417,6 +417,67 @@ def metrics():
         scheduled = totals["scheduled"] or 0
         total = totals["total"] or 0
 
+        # Replan metrics are computed from the same replan_log that powers
+        # the Replan History page. This keeps the Metrics page consistent
+        # with the actual before/after changes recorded by the replanner.
+        replan = fetch_one(
+            cursor,
+            """
+            SELECT
+                COUNT(DISTINCT interview_id) AS affected,
+                COUNT(DISTINCT CASE
+                    WHEN new_start_time IS NOT NULL
+                      OR new_end_time IS NOT NULL
+                    THEN interview_id
+                END) AS repaired,
+                COUNT(DISTINCT CASE
+                    WHEN new_start_time IS NULL
+                      AND new_end_time IS NULL
+                    THEN interview_id
+                END) AS cancelled,
+                COALESCE(MAX(
+                    CASE
+                        WHEN old_start_time IS NOT NULL
+                         AND new_start_time IS NOT NULL
+                        THEN ABS(TIMESTAMPDIFF(MINUTE, old_start_time, new_start_time))
+                        ELSE 0
+                    END
+                ), 0) AS maximum_displacement
+            FROM replan_log
+            """,
+        )
+
+        # Use the baseline scheduled count when available so churn reflects
+        # the proportion of the original schedule that was touched.
+        baseline_table = fetch_one(
+            cursor,
+            """
+            SELECT COUNT(*) AS count
+            FROM information_schema.tables
+            WHERE table_schema = DATABASE()
+              AND table_name = 'interviews_baseline'
+            """,
+        )
+
+        baseline_scheduled = 0
+        if baseline_table and baseline_table["count"]:
+            baseline = fetch_one(
+                cursor,
+                """
+                SELECT COUNT(*) AS count
+                FROM interviews_baseline
+                WHERE status = 'scheduled'
+                """,
+            )
+            baseline_scheduled = (baseline or {}).get("count") or 0
+
+        replan_affected = replan["affected"] or 0
+        replan_churn = (
+            replan_affected / baseline_scheduled * 100
+            if baseline_scheduled
+            else 0
+        )
+
         return {
             "total_interviews": total,
             "scheduled": scheduled,
@@ -433,6 +494,11 @@ def metrics():
             )["count"],
             "average_interviews": float(fairness["avg_interviews"] or 0),
             "maximum_interviews": fairness["max_interviews"] or 0,
+            "replan_affected": replan_affected,
+            "replan_repaired": replan["repaired"] or 0,
+            "replan_cancelled": replan["cancelled"] or 0,
+            "maximum_displacement": replan["maximum_displacement"] or 0,
+            "replan_churn": replan_churn,
             **conflicts,
             "hard_conflicts": sum(conflicts.values()),
         }
