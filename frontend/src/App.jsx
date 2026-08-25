@@ -55,6 +55,7 @@ import {
 export default function App() {
   const [activeTab, setActiveTab] = useState("overview");
   const [selectedDay, setSelectedDay] = useState(1);
+  const [searchQuery, setSearchQuery] = useState("");
 
   const [dashboard, setDashboard] = useState(null);
   const [interviews, setInterviews] = useState([]);
@@ -72,62 +73,130 @@ export default function App() {
   const [showNotifications, setShowNotifications] = useState(false);
 
   async function loadAllData() {
-    try {
+    setLoading(true);
+
+    const requests = [
+      getDashboard(),
+      getInterviews(),
+      getRooms(),
+      getPanels(),
+      getStudents(),
+      getCompanies(),
+      getMetrics(),
+      getReplanLog(),
+    ];
+
+    const results = await Promise.allSettled(requests);
+    const names = [
+      "dashboard",
+      "interviews",
+      "rooms",
+      "panels",
+      "students",
+      "companies",
+      "metrics",
+      "replan history",
+    ];
+
+    let failures = [];
+
+    results.forEach((result, index) => {
+      if (result.status === "fulfilled") {
+        const value = result.value;
+        switch (index) {
+          case 0:
+            setDashboard(value || null);
+            break;
+          case 1:
+            setInterviews(Array.isArray(value) ? value : []);
+            break;
+          case 2:
+            setRooms(Array.isArray(value) ? value : []);
+            break;
+          case 3:
+            setPanels(Array.isArray(value) ? value : []);
+            break;
+          case 4:
+            setStudents(Array.isArray(value) ? value : []);
+            break;
+          case 5:
+            setCompanies(Array.isArray(value) ? value : []);
+            break;
+          case 6:
+            setMetrics(value || null);
+            break;
+          case 7:
+            setReplanLog(Array.isArray(value) ? value : []);
+            break;
+        }
+      } else {
+        failures.push(`${names[index]}: ${result.reason?.message || "request failed"}`);
+      }
+    });
+
+    if (failures.length) {
+      setError(failures.join(" • "));
+    } else {
       setError("");
-
-      const [
-        dash,
-        interviewRows,
-        roomRows,
-        panelRows,
-        studentRows,
-        companyRows,
-        metricData,
-        logRows,
-      ] = await Promise.all([
-        getDashboard(),
-        getInterviews(),
-        getRooms(),
-        getPanels(),
-        getStudents(),
-        getCompanies(),
-        getMetrics(),
-        getReplanLog(),
-      ]);
-
-      setDashboard(dash);
-      setInterviews(Array.isArray(interviewRows) ? interviewRows : []);
-      setRooms(Array.isArray(roomRows) ? roomRows : []);
-      setPanels(Array.isArray(panelRows) ? panelRows : []);
-      setStudents(Array.isArray(studentRows) ? studentRows : []);
-      setCompanies(Array.isArray(companyRows) ? companyRows : []);
-      setMetrics(metricData || null);
-      setReplanLog(Array.isArray(logRows) ? logRows : []);
-    } catch (err) {
-      setError(err?.message || "Failed to load dashboard data.");
-    } finally {
-      setLoading(false);
     }
+
+    setLoading(false);
   }
 
   async function loadOperationalData() {
-    try {
-      const [dash, interviewRows, roomRows, panelRows, logRows] =
-        await Promise.all([
-          getDashboard(),
-          getInterviews(),
-          getRooms(),
-          getPanels(),
-          getReplanLog(),
-        ]);
+    const requests = [
+      getDashboard(),
+      getInterviews(),
+      getRooms(),
+      getPanels(),
+      getReplanLog(),
+      getMetrics(),
+    ];
 
-      setDashboard(dash);
-      setInterviews(Array.isArray(interviewRows) ? interviewRows : []);
-      setRooms(Array.isArray(roomRows) ? roomRows : []);
-      setPanels(Array.isArray(panelRows) ? panelRows : []);
-      setReplanLog(Array.isArray(logRows) ? logRows : []);
-    } catch (err) {
-      setError(err?.message || "Failed to refresh live data.");
+    const results = await Promise.allSettled(requests);
+    const names = [
+      "dashboard",
+      "interviews",
+      "rooms",
+      "panels",
+      "replan history",
+      "metrics",
+    ];
+
+    let failures = [];
+
+    results.forEach((result, index) => {
+      if (result.status === "fulfilled") {
+        const value = result.value;
+        switch (index) {
+          case 0:
+            setDashboard(value || null);
+            break;
+          case 1:
+            setInterviews(Array.isArray(value) ? value : []);
+            break;
+          case 2:
+            setRooms(Array.isArray(value) ? value : []);
+            break;
+          case 3:
+            setPanels(Array.isArray(value) ? value : []);
+            break;
+          case 4:
+            setReplanLog(Array.isArray(value) ? value : []);
+            break;
+          case 5:
+            setMetrics(value || null);
+            break;
+        }
+      } else {
+        failures.push(`${names[index]}: ${result.reason?.message || "request failed"}`);
+      }
+    });
+
+    if (failures.length) {
+      setError(failures.join(" • "));
+    } else {
+      setError("");
     }
   }
 
@@ -145,7 +214,7 @@ export default function App() {
 
   async function handleRestoreBaseline() {
     const confirmed = window.confirm(
-      "Restore the saved baseline schedule? This will undo current replanning changes, clear replan history, and reset disrupted resources."
+      "Restore the saved baseline schedule? This will undo current replanning changes, clear replan history, and restore the saved room, panel, and student states."
     );
 
     if (!confirmed) return;
@@ -153,44 +222,77 @@ export default function App() {
     try {
       setError("");
       await restoreBaseline();
+      setSearchQuery("");
       await loadAllData();
       setActiveTab("overview");
     } catch (err) {
       setError(err?.message || "Failed to restore the baseline schedule.");
     }
   }
-  const placementDates = useMemo(() => {
-    const dates = Array.from(
-      new Set(
-        interviews
-          .map((row) => {
-            if (!row.start_time) return null;
-            return String(row.start_time).slice(0, 10);
-          })
-          .filter(Boolean)
-      )
-    ).sort();
 
-    return dates;
+  const placementDates = useMemo(() => {
+    const dates = interviews
+      .map((row) => (row.start_time ? String(row.start_time).slice(0, 10) : null))
+      .filter(Boolean)
+      .sort();
+
+    const anchor = dates[0];
+    if (!anchor) return [];
+
+    return Array.from({ length: 4 }, (_, index) => addDaysISO(anchor, index));
   }, [interviews]);
 
   const selectedDate =
     placementDates[selectedDay - 1] || placementDates[0] || "";
 
   const dayInterviews = useMemo(() => {
-    if (!selectedDate) return interviews;
+    const current = selectedDate
+      ? interviews.filter(
+          (row) =>
+            row.start_time &&
+            String(row.start_time).slice(0, 10) === selectedDate
+        )
+      : interviews;
 
-    return interviews.filter(
-      (row) =>
-        row.start_time &&
-        String(row.start_time).slice(0, 10) === selectedDate
-    );
-  }, [interviews, selectedDate]);
+    const query = searchQuery.trim().toLowerCase();
+    if (!query) return current;
+
+    return current.filter((row) => {
+      const haystack = [
+        row.id,
+        row.student_id,
+        row.student_name,
+        row.company_id,
+        row.company_name,
+        row.room_id,
+        row.room_name,
+        row.panel_id,
+        row.status,
+      ]
+        .filter((value) => value !== null && value !== undefined)
+        .join(" ")
+        .toLowerCase();
+
+      return haystack.includes(query);
+    });
+  }, [interviews, selectedDate, searchQuery]);
+
+  const systemHealthy = !dashboard
+    ? true
+    : rooms.length > 0 &&
+      panels.length > 0 &&
+      rooms.every(
+        (room) => String(room.status || "").toLowerCase() !== "offline"
+      ) &&
+      panels.every(
+        (panel) => String(panel.status || "").toLowerCase() === "available"
+      ) &&
+      Number(dashboard.hard_conflicts || 0) === 0;
 
 
   return (
     <div className="flex h-screen bg-[var(--background)] text-[var(--foreground)] font-sans antialiased">
-      <Sidebar activeTab={activeTab} setActiveTab={setActiveTab} />
+      <Sidebar activeTab={activeTab} setActiveTab={setActiveTab} systemHealthy={systemHealthy} />
 
       <div className="relative flex flex-1 flex-col h-screen overflow-hidden">
         <TopBar
@@ -202,6 +304,8 @@ export default function App() {
             setShowNotifications((current) => !current)
           }
           notificationCount={notificationCount}
+          searchQuery={searchQuery}
+          onSearchChange={setSearchQuery}
         />
 
         {showNotifications && (
@@ -300,7 +404,7 @@ export default function App() {
   );
 }
 
-function Sidebar({ activeTab, setActiveTab }) {
+function Sidebar({ activeTab, setActiveTab, systemHealthy }) {
   const navItems = [
     { id: "overview", label: "Overview", icon: LayoutDashboard },
     { id: "schedule", label: "Live Schedule", icon: CalendarDays },
@@ -347,9 +451,17 @@ function Sidebar({ activeTab, setActiveTab }) {
       </div>
 
       <div className="space-y-4 border-t border-slate-800/60 p-4 text-sm">
-        <div className="flex items-center text-xs font-medium text-green-400">
-          <div className="mr-2 h-2 w-2 rounded-full bg-green-500" />
-          All systems operational
+        <div
+          className={`flex items-center text-xs font-medium ${
+            systemHealthy ? "text-green-400" : "text-amber-400"
+          }`}
+        >
+          <div
+            className={`mr-2 h-2 w-2 rounded-full ${
+              systemHealthy ? "bg-green-500" : "bg-amber-500"
+            }`}
+          />
+          {systemHealthy ? "All systems operational" : "Attention required"}
         </div>
 
         <div className="flex items-center text-slate-300">
@@ -371,7 +483,7 @@ function Sidebar({ activeTab, setActiveTab }) {
   );
 }
 
-function TopBar({ selectedDay, setSelectedDay, totalDays, placementDates, onOpenNotifications, notificationCount }) {
+function TopBar({ selectedDay, setSelectedDay, totalDays, placementDates, onOpenNotifications, notificationCount, searchQuery, onSearchChange }) {
   return (
     <header className="z-10 flex h-14 shrink-0 items-center justify-between border-b border-[var(--border)] bg-white px-6">
       <div className="flex flex-1 items-center space-x-4">
@@ -404,6 +516,8 @@ function TopBar({ selectedDay, setSelectedDay, totalDays, placementDates, onOpen
           <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
           <input
             type="text"
+            value={searchQuery}
+            onChange={(event) => onSearchChange(event.target.value)}
             placeholder="Search student, company, room or interview..."
             className="w-full border border-slate-200 bg-slate-50 py-1.5 pl-9 pr-4 text-sm text-slate-900 placeholder-slate-400 focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
           />
@@ -1001,7 +1115,11 @@ function ResourceStatus({ rooms, panels }) {
 
 function UpcomingInterviews({ interviews }) {
   const upcoming = [...interviews]
-    .filter((row) => row.start_time)
+    .filter(
+      (row) =>
+        row.start_time &&
+        String(row.status || "scheduled").toLowerCase() === "scheduled"
+    )
     .sort(
       (a, b) =>
         new Date(a.start_time).getTime() -
@@ -2096,6 +2214,12 @@ function ResultItem({ label, value }) {
       </div>
     </div>
   );
+}
+
+function addDaysISO(isoDate, days) {
+  const date = new Date(`${isoDate}T00:00:00`);
+  date.setDate(date.getDate() + days);
+  return date.toISOString().slice(0, 10);
 }
 
 function formatDateLabel(isoDate) {

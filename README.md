@@ -184,3 +184,7 @@ The project treats hard feasibility constraints as non-negotiable:
 - interview duration respected
 
 When a replan cannot find an acceptable replacement within the 120-minute automatic displacement budget, the affected interview is explicitly cancelled and the reason is logged rather than silently moved an unreasonable distance.
+
+### Coordinator restore
+
+The dashboard supports restoring the saved baseline through `POST /api/replan/restore-baseline`. The restore uses the same baseline tables as `backend/replan_metrics.py`, clears the replan log first, and restores interview, room, panel, and student state together.

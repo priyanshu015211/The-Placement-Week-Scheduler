@@ -4,6 +4,7 @@ from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, Field
 
 from db import get_connection
+from replan_metrics import baseline_ready, restore_baseline as restore_saved_baseline
 from replanner import (
     handle_company_delay,
     handle_panel_drop,
@@ -191,7 +192,8 @@ def interviews():
               ON r.id = i.room_id
             LEFT JOIN panels p
               ON p.id = i.panel_id
-            WHERE i.status = 'scheduled'
+            WHERE i.start_time IS NOT NULL
+               OR i.status = 'cancelled'
             ORDER BY i.start_time, i.id
             """
         )
@@ -503,33 +505,42 @@ def metrics():
         average_wait = sum(waits) / len(waits) if waits else 0.0
         maximum_wait = max(waits) if waits else 0.0
 
-        # Replan metrics are computed from the same replan_log that powers
-        # the Replan History page. This keeps the Metrics page consistent
-        # with the actual before/after changes recorded by the replanner.
+        # Classify each affected interview by its latest logged change so
+        # repaired + cancelled == affected even after multiple disruptions.
         replan = fetch_one(
             cursor,
             """
             SELECT
-                COUNT(DISTINCT interview_id) AS affected,
-                COUNT(DISTINCT CASE
-                    WHEN new_start_time IS NOT NULL
-                      OR new_end_time IS NOT NULL
-                    THEN interview_id
+                COUNT(*) AS affected,
+                SUM(CASE
+                    WHEN latest.new_start_time IS NOT NULL
+                      OR latest.new_end_time IS NOT NULL
+                    THEN 1 ELSE 0
                 END) AS repaired,
-                COUNT(DISTINCT CASE
-                    WHEN new_start_time IS NULL
-                      AND new_end_time IS NULL
-                    THEN interview_id
+                SUM(CASE
+                    WHEN latest.new_start_time IS NULL
+                     AND latest.new_end_time IS NULL
+                    THEN 1 ELSE 0
                 END) AS cancelled,
                 COALESCE(MAX(
                     CASE
-                        WHEN old_start_time IS NOT NULL
-                         AND new_start_time IS NOT NULL
-                        THEN ABS(TIMESTAMPDIFF(MINUTE, old_start_time, new_start_time))
+                        WHEN latest.old_start_time IS NOT NULL
+                         AND latest.new_start_time IS NOT NULL
+                        THEN ABS(TIMESTAMPDIFF(
+                            MINUTE,
+                            latest.old_start_time,
+                            latest.new_start_time
+                        ))
                         ELSE 0
                     END
                 ), 0) AS maximum_displacement
-            FROM replan_log
+            FROM replan_log latest
+            JOIN (
+                SELECT interview_id, MAX(id) AS latest_id
+                FROM replan_log
+                GROUP BY interview_id
+            ) newest
+              ON newest.latest_id = latest.id
             """,
         )
 
@@ -621,6 +632,22 @@ class StudentWithdrawalRequest(BaseModel):
 
 
 # ---------------------------------------------------------
+# Replanning validation helpers
+# ---------------------------------------------------------
+
+def ensure_exists(cursor, table_name, record_id, label):
+    cursor.execute(
+        f"SELECT id FROM {table_name} WHERE id = %s",
+        (record_id,),
+    )
+    if cursor.fetchone() is None:
+        raise HTTPException(
+            status_code=404,
+            detail=f"{label} {record_id} was not found.",
+        )
+
+
+# ---------------------------------------------------------
 # Replanning endpoints
 # ---------------------------------------------------------
 
@@ -630,6 +657,7 @@ def company_delay(request: CompanyDelayRequest):
     cursor = conn.cursor(dictionary=True)
 
     try:
+        ensure_exists(cursor, "companies", request.company_id, "Company")
         result = handle_company_delay(
             cursor,
             request.company_id,
@@ -653,6 +681,7 @@ def panel_drop(request: PanelDropRequest):
     cursor = conn.cursor(dictionary=True)
 
     try:
+        ensure_exists(cursor, "panels", request.panel_id, "Panel")
         result = handle_panel_drop(cursor, request.panel_id)
         conn.commit()
         return result
@@ -672,6 +701,7 @@ def room_offline(request: RoomOfflineRequest):
     cursor = conn.cursor(dictionary=True)
 
     try:
+        ensure_exists(cursor, "rooms", request.room_id, "Room")
         result = handle_room_offline(cursor, request.room_id)
         conn.commit()
         return result
@@ -691,6 +721,7 @@ def withdraw(request: StudentWithdrawalRequest):
     cursor = conn.cursor(dictionary=True)
 
     try:
+        ensure_exists(cursor, "students", request.student_id, "Student")
         result = handle_withdrawal(cursor, request.student_id)
         conn.commit()
         return result
@@ -710,133 +741,33 @@ def withdraw(request: StudentWithdrawalRequest):
 
 @app.post("/api/replan/restore-baseline")
 def restore_baseline():
-    """Restore the saved baseline without deleting interviews first.
-
-    The replan log references interviews with foreign keys, so the log is
-    cleared before the schedule is restored. Resource/student disruption
-    state is also reset to the baseline operating state used by this app.
-    """
+    """Restore the saved baseline using the same source as the CLI tool."""
     conn = get_connection()
     cursor = conn.cursor(dictionary=True)
 
     try:
-        cursor.execute(
-            """
-            SELECT COUNT(*) AS count
-            FROM information_schema.tables
-            WHERE table_schema = DATABASE()
-              AND table_name = 'interviews_baseline'
-            """
-        )
-        table = cursor.fetchone()
-
-        if not table or not table["count"]:
+        if not baseline_ready(cursor):
             raise HTTPException(
                 status_code=409,
-                detail="No saved baseline exists. Run: python replan_metrics.py --save-baseline"
+                detail="No complete baseline exists. Run: python replan_metrics.py --save-baseline",
             )
 
-        baseline_count = fetch_one(
-            cursor,
-            "SELECT COUNT(*) AS count FROM interviews_baseline",
-        )["count"]
-
-        if not baseline_count:
-            raise HTTPException(
-                status_code=409,
-                detail="The saved baseline is empty. Run the scheduler and save a baseline first."
-            )
-
-        # replan_log has a foreign key to interviews, so clear it first.
-        cursor.execute("DELETE FROM replan_log")
-        cleared_logs = cursor.rowcount
-
-        # Restore every baseline row that still exists.
-        cursor.execute(
-            """
-            UPDATE interviews i
-            JOIN interviews_baseline b ON b.id = i.id
-            SET
-                i.student_id = b.student_id,
-                i.company_id = b.company_id,
-                i.room_id = b.room_id,
-                i.panel_id = b.panel_id,
-                i.start_time = b.start_time,
-                i.end_time = b.end_time,
-                i.status = b.status,
-                i.reason = b.reason
-            """
-        )
-        restored_existing = cursor.rowcount
-
-        # Re-add any baseline rows that are missing from the live table.
-        cursor.execute(
-            """
-            INSERT INTO interviews
-                (id, student_id, company_id, room_id, panel_id,
-                 start_time, end_time, status, reason)
-            SELECT
-                b.id, b.student_id, b.company_id, b.room_id, b.panel_id,
-                b.start_time, b.end_time, b.status, b.reason
-            FROM interviews_baseline b
-            LEFT JOIN interviews i ON i.id = b.id
-            WHERE i.id IS NULL
-            """
-        )
-        restored_missing = cursor.rowcount
-
-        # Remove any live rows that are not part of the saved baseline.
-        # This is safe after replan_log has been cleared.
-        cursor.execute(
-            """
-            DELETE i
-            FROM interviews i
-            LEFT JOIN interviews_baseline b ON b.id = i.id
-            WHERE b.id IS NULL
-            """
-        )
-        removed_extra = cursor.rowcount
-
-        # Reset operational disruption state to the baseline state.
-        cursor.execute("UPDATE rooms SET status = 'available'")
-        rooms_reset = cursor.rowcount
-
-        cursor.execute("UPDATE panels SET status = 'available'")
-        panels_reset = cursor.rowcount
-
-        cursor.execute("UPDATE students SET status = 'active'")
-        students_reset = cursor.rowcount
-
-        # Test disruption records are no longer relevant after a full restore.
-        cursor.execute(
-            """
-            SELECT COUNT(*) AS cnt
-            FROM information_schema.tables
-            WHERE table_schema = DATABASE()
-              AND table_name = 'disruptions'
-            """
-        )
-        has_disruptions = cursor.fetchone()["cnt"] > 0
-        disruptions_cleared = 0
-        if has_disruptions:
-            cursor.execute("DELETE FROM disruptions")
-            disruptions_cleared = cursor.rowcount
-
+        restore_saved_baseline(cursor)
         conn.commit()
+
+        restored = fetch_one(
+            cursor,
+            "SELECT COUNT(*) AS count FROM interviews",
+        )["count"]
+        logs = fetch_one(
+            cursor,
+            "SELECT COUNT(*) AS count FROM replan_log",
+        )["count"]
 
         return {
             "status": "restored",
-            "restored_interviews": baseline_count,
-            "updated_existing": restored_existing,
-            "inserted_missing": restored_missing,
-            "removed_extra": removed_extra,
-            "baseline_interviews": baseline_count,
-            "removed_extra_interviews": removed_extra,
-            "cleared_replan_logs": cleared_logs,
-            "rooms_reset": rooms_reset,
-            "panels_reset": panels_reset,
-            "students_reset": students_reset,
-            "disruptions_cleared": disruptions_cleared,
+            "restored_interviews": restored,
+            "cleared_replan_logs": logs,
         }
 
     except HTTPException:
