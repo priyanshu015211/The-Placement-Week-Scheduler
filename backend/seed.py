@@ -65,8 +65,8 @@ def seed_database():
 
         # ---- rooms ----
         cursor.executemany(
-            "INSERT INTO rooms (name, capacity) VALUES (%s, %s)",
-            [(r["name"], r["capacity"]) for r in rooms]
+            "INSERT INTO rooms (name, capacity, status) VALUES (%s, %s, %s)",
+            [(r["name"], r["capacity"], "available") for r in rooms]
         )
 
         # ---- shortlists ----

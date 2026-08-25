@@ -132,7 +132,8 @@ def free_room(
     query = f"""
         SELECT id
         FROM rooms
-        WHERE id != COALESCE(%s, -1)
+        WHERE status = 'available'
+          AND id != COALESCE(%s, -1)
           AND id NOT IN (
               SELECT room_id
               FROM interviews
@@ -573,9 +574,7 @@ def handle_withdrawal(
     cursor,
     student_id,
 ):
-    print(
-        f"\n[DISRUPTION] Student {student_id} withdrawal"
-    )
+    print(f"\n[DISRUPTION] Student {student_id} withdrawal")
 
     cursor.execute(
         """
@@ -583,6 +582,7 @@ def handle_withdrawal(
         FROM interviews
         WHERE student_id = %s
           AND status = 'scheduled'
+        ORDER BY start_time, id
         """,
         (student_id,),
     )
@@ -606,7 +606,6 @@ def handle_withdrawal(
     )
 
     for row in affected:
-
         cursor.execute(
             """
             UPDATE interviews
@@ -624,29 +623,43 @@ def handle_withdrawal(
             row["panel_id"],
             row["start_time"],
             row["end_time"],
-            None,
-            None,
-            None,
-            None,
+            None, None, None, None,
             "Student withdrew",
         )
+
+    result = {
+        "status": "completed",
+        "type": "student_withdrawal",
+        "student_id": student_id,
+        "affected": len(affected),
+        "repaired": 0,
+        "cancelled": len(affected),
+    }
 
     print(
         f"-> Cancelled {len(affected)} interviews"
     )
+    return result
 
 
 # ------------------------------------------------------------
 # Room unavailable
 # ------------------------------------------------------------
 
-def handle_room_offline(
-    cursor,
-    room_id,
-):
-    print(
-        f"\n[DISRUPTION] Room {room_id} offline"
+def handle_room_offline(cursor, room_id):
+    print(f"\n[DISRUPTION] Room {room_id} offline")
+
+    cursor.execute(
+        """
+        SELECT id, status
+        FROM rooms
+        WHERE id = %s
+        """,
+        (room_id,),
     )
+    room = cursor.fetchone()
+    if not room:
+        raise ValueError(f"Room {room_id} not found")
 
     cursor.execute(
         """
@@ -658,8 +671,17 @@ def handle_room_offline(
         """,
         (room_id,),
     )
-
     affected = cursor.fetchall()
+
+    # Mark the resource offline before committing the disruption.
+    cursor.execute(
+        """
+        UPDATE rooms
+        SET status = 'offline'
+        WHERE id = %s
+        """,
+        (room_id,),
+    )
 
     log_disruption(
         cursor,
@@ -678,13 +700,10 @@ def handle_room_offline(
     cancelled = 0
 
     for row in affected:
-
         iid = row["id"]
 
         if iid in assignment:
-
             new = assignment[iid]
-
             cursor.execute(
                 """
                 UPDATE interviews
@@ -695,35 +714,21 @@ def handle_room_offline(
                 WHERE id=%s
                 """,
                 (
-                    new["start"],
-                    new["end"],
-                    new["room_id"],
-                    new["panel_id"],
-                    iid,
+                    new["start"], new["end"],
+                    new["room_id"], new["panel_id"], iid,
                 ),
             )
 
             log_replan(
-                cursor,
-                iid,
-                row["room_id"],
-                row["panel_id"],
-                row["start_time"],
-                row["end_time"],
-                new["room_id"],
-                new["panel_id"],
-                new["start"],
-                new["end"],
-                (
-                    f"Room {room_id} offline; "
-                    f"shifted {new['displacement']} min"
-                ),
+                cursor, iid,
+                row["room_id"], row["panel_id"],
+                row["start_time"], row["end_time"],
+                new["room_id"], new["panel_id"],
+                new["start"], new["end"],
+                f"Room {room_id} offline; shifted {new['displacement']} min",
             )
-
             repaired += 1
-
         else:
-
             cursor.execute(
                 """
                 UPDATE interviews
@@ -735,43 +740,53 @@ def handle_room_offline(
             )
 
             log_replan(
-                cursor,
-                iid,
-                row["room_id"],
-                row["panel_id"],
-                row["start_time"],
-                row["end_time"],
-                None,
-                None,
-                None,
-                None,
+                cursor, iid,
+                row["room_id"], row["panel_id"],
+                row["start_time"], row["end_time"],
+                None, None, None, None,
                 (
-                    f"Room {room_id} offline; "
-                    "no feasible replacement within "
-                    f"{MAX_REPLAN_SHIFT_MINUTES} min"
+                    f"Room {room_id} offline; no feasible replacement "
+                    f"within {MAX_REPLAN_SHIFT_MINUTES} min"
                 ),
             )
-
             cancelled += 1
+
+    result = {
+        "status": "completed",
+        "type": "room_offline",
+        "room_id": room_id,
+        "affected": len(affected),
+        "repaired": repaired,
+        "cancelled": cancelled,
+        "max_displacement": MAX_REPLAN_SHIFT_MINUTES,
+    }
 
     print(
         f"-> Affected: {len(affected)} | "
         f"Repaired: {repaired} | "
         f"Cancelled: {cancelled}"
     )
+    return result
 
 
 # ------------------------------------------------------------
 # Panel dropped
 # ------------------------------------------------------------
 
-def handle_panel_drop(
-    cursor,
-    panel_id,
-):
-    print(
-        f"\n[DISRUPTION] Panel {panel_id} dropped"
+def handle_panel_drop(cursor, panel_id):
+    print(f"\n[DISRUPTION] Panel {panel_id} dropped")
+
+    cursor.execute(
+        """
+        SELECT id, company_id, status
+        FROM panels
+        WHERE id = %s
+        """,
+        (panel_id,),
     )
+    panel = cursor.fetchone()
+    if not panel:
+        raise ValueError(f"Panel {panel_id} not found")
 
     cursor.execute(
         """
@@ -783,8 +798,16 @@ def handle_panel_drop(
         """,
         (panel_id,),
     )
-
     affected = cursor.fetchall()
+
+    cursor.execute(
+        """
+        UPDATE panels
+        SET status = 'unavailable'
+        WHERE id = %s
+        """,
+        (panel_id,),
+    )
 
     log_disruption(
         cursor,
@@ -803,13 +826,10 @@ def handle_panel_drop(
     cancelled = 0
 
     for row in affected:
-
         iid = row["id"]
 
         if iid in assignment:
-
             new = assignment[iid]
-
             cursor.execute(
                 """
                 UPDATE interviews
@@ -820,35 +840,21 @@ def handle_panel_drop(
                 WHERE id=%s
                 """,
                 (
-                    new["start"],
-                    new["end"],
-                    new["room_id"],
-                    new["panel_id"],
-                    iid,
+                    new["start"], new["end"],
+                    new["room_id"], new["panel_id"], iid,
                 ),
             )
 
             log_replan(
-                cursor,
-                iid,
-                row["room_id"],
-                row["panel_id"],
-                row["start_time"],
-                row["end_time"],
-                new["room_id"],
-                new["panel_id"],
-                new["start"],
-                new["end"],
-                (
-                    f"Panel {panel_id} dropped; "
-                    f"shifted {new['displacement']} min"
-                ),
+                cursor, iid,
+                row["room_id"], row["panel_id"],
+                row["start_time"], row["end_time"],
+                new["room_id"], new["panel_id"],
+                new["start"], new["end"],
+                f"Panel {panel_id} dropped; shifted {new['displacement']} min",
             )
-
             repaired += 1
-
         else:
-
             cursor.execute(
                 """
                 UPDATE interviews
@@ -860,45 +866,56 @@ def handle_panel_drop(
             )
 
             log_replan(
-                cursor,
-                iid,
-                row["room_id"],
-                row["panel_id"],
-                row["start_time"],
-                row["end_time"],
-                None,
-                None,
-                None,
-                None,
+                cursor, iid,
+                row["room_id"], row["panel_id"],
+                row["start_time"], row["end_time"],
+                None, None, None, None,
                 (
-                    f"Panel {panel_id} dropped; "
-                    "no feasible replacement within "
-                    f"{MAX_REPLAN_SHIFT_MINUTES} min"
+                    f"Panel {panel_id} dropped; no feasible replacement "
+                    f"within {MAX_REPLAN_SHIFT_MINUTES} min"
                 ),
             )
-
             cancelled += 1
+
+    result = {
+        "status": "completed",
+        "type": "panel_drop",
+        "panel_id": panel_id,
+        "affected": len(affected),
+        "repaired": repaired,
+        "cancelled": cancelled,
+    }
 
     print(
         f"-> Affected: {len(affected)} | "
         f"Repaired: {repaired} | "
         f"Cancelled: {cancelled}"
     )
+    return result
 
 
 # ------------------------------------------------------------
 # Company delay
 # ------------------------------------------------------------
 
-def handle_company_delay(
-    cursor,
-    company_id,
-    delay_minutes,
-):
+def handle_company_delay(cursor, company_id, delay_minutes):
     print(
-        f"\n[DISRUPTION] Company {company_id} "
-        f"delayed by {delay_minutes} min"
+        f"\n[DISRUPTION] Company {company_id} delayed by {delay_minutes} min"
     )
+
+    if delay_minutes < 0:
+        raise ValueError("Delay must be non-negative")
+
+    cursor.execute(
+        """
+        SELECT id
+        FROM companies
+        WHERE id = %s
+        """,
+        (company_id,),
+    )
+    if not cursor.fetchone():
+        raise ValueError(f"Company {company_id} not found")
 
     cursor.execute(
         """
@@ -910,7 +927,6 @@ def handle_company_delay(
         """,
         (company_id,),
     )
-
     affected = cursor.fetchall()
 
     log_disruption(
@@ -918,19 +934,12 @@ def handle_company_delay(
         "company_delay",
         company_id=company_id,
         delay_minutes=delay_minutes,
-        reason=(
-            f"Company delayed by "
-            f"{delay_minutes} minutes"
-        ),
+        reason=f"Company delayed by {delay_minutes} minutes",
     )
 
-    delay = timedelta(
-        minutes=delay_minutes
-    )
-
+    delay = timedelta(minutes=delay_minutes)
     earliest_times = {
-        row["id"]:
-            row["start_time"] + delay
+        row["id"]: row["start_time"] + delay
         for row in affected
     }
 
@@ -942,15 +951,13 @@ def handle_company_delay(
 
     repaired = 0
     cancelled = 0
+    displacements = []
 
     for row in affected:
-
         iid = row["id"]
 
         if iid in assignment:
-
             new = assignment[iid]
-
             cursor.execute(
                 """
                 UPDATE interviews
@@ -961,35 +968,22 @@ def handle_company_delay(
                 WHERE id=%s
                 """,
                 (
-                    new["start"],
-                    new["end"],
-                    new["room_id"],
-                    new["panel_id"],
-                    iid,
+                    new["start"], new["end"],
+                    new["room_id"], new["panel_id"], iid,
                 ),
             )
 
             log_replan(
-                cursor,
-                iid,
-                row["room_id"],
-                row["panel_id"],
-                row["start_time"],
-                row["end_time"],
-                new["room_id"],
-                new["panel_id"],
-                new["start"],
-                new["end"],
-                (
-                    f"Company delay {delay_minutes} min; "
-                    f"actual shift {new['displacement']} min"
-                ),
+                cursor, iid,
+                row["room_id"], row["panel_id"],
+                row["start_time"], row["end_time"],
+                new["room_id"], new["panel_id"],
+                new["start"], new["end"],
+                f"Company delay {delay_minutes} min; actual shift {new['displacement']} min",
             )
-
             repaired += 1
-
+            displacements.append(new["displacement"])
         else:
-
             cursor.execute(
                 """
                 UPDATE interviews
@@ -1001,30 +995,38 @@ def handle_company_delay(
             )
 
             log_replan(
-                cursor,
-                iid,
-                row["room_id"],
-                row["panel_id"],
-                row["start_time"],
-                row["end_time"],
-                None,
-                None,
-                None,
-                None,
+                cursor, iid,
+                row["room_id"], row["panel_id"],
+                row["start_time"], row["end_time"],
+                None, None, None, None,
                 (
-                    "No feasible slot after company "
-                    f"delay within {MAX_REPLAN_SHIFT_MINUTES} "
-                    "min displacement"
+                    "No feasible slot after company delay within "
+                    f"{MAX_REPLAN_SHIFT_MINUTES} min displacement"
                 ),
             )
-
             cancelled += 1
+
+    result = {
+        "status": "completed",
+        "type": "company_delay",
+        "company_id": company_id,
+        "delay_minutes": delay_minutes,
+        "affected": len(affected),
+        "repaired": repaired,
+        "cancelled": cancelled,
+        "average_displacement": (
+            sum(displacements) / len(displacements)
+            if displacements else 0
+        ),
+        "maximum_displacement": max(displacements) if displacements else 0,
+    }
 
     print(
         f"-> Affected: {len(affected)} | "
         f"Repaired: {repaired} | "
         f"Cancelled: {cancelled}"
     )
+    return result
 
 
 # ------------------------------------------------------------

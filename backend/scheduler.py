@@ -71,6 +71,8 @@ def load_data(cursor):
     cursor.execute("""
         SELECT *
         FROM rooms
+        WHERE status = 'available'
+        ORDER BY id
     """)
     rooms = cursor.fetchall()
 
