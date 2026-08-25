@@ -8,12 +8,47 @@ from generator import (
     print_summary,
 )
 
+def table_exists(cursor, table_name):
+    cursor.execute(
+        """
+        SELECT COUNT(*) AS cnt
+        FROM information_schema.tables
+        WHERE table_schema = DATABASE()
+          AND table_name = %s
+        """,
+        (table_name,),
+    )
+    return cursor.fetchone()["cnt"] > 0
+
+
 def reset_tables(cursor):
     cursor.execute("SET FOREIGN_KEY_CHECKS = 0")
-    for table in ["replan_log", "disruptions", "interviews",
-                  "shortlists", "panels", "rooms", "students", "companies"]:
-        cursor.execute(f"TRUNCATE TABLE {table}")
-    cursor.execute("SET FOREIGN_KEY_CHECKS = 1")
+    try:
+        required_tables = [
+            "replan_log",
+            "disruptions",
+            "interviews",
+            "shortlists",
+            "panels",
+            "rooms",
+            "students",
+            "companies",
+        ]
+        for table in required_tables:
+            cursor.execute(f"TRUNCATE TABLE {table}")
+
+        # Baseline snapshots are optional on older databases, but when
+        # present they must never survive a fresh seed.
+        for table in (
+            "interviews_baseline",
+            "rooms_baseline",
+            "panels_baseline",
+            "students_baseline",
+        ):
+            if table_exists(cursor, table):
+                cursor.execute(f"TRUNCATE TABLE {table}")
+    finally:
+        cursor.execute("SET FOREIGN_KEY_CHECKS = 1")
 
 
 def seed_database():
