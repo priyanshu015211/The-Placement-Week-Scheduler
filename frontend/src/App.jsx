@@ -36,6 +36,7 @@ import {
   dropPanel,
   offlineRoom,
   withdrawStudent,
+  restoreBaseline,
 } from "./api";
 
 /*
@@ -141,6 +142,23 @@ export default function App() {
   }, []);
 
   const notificationCount = replanLog.length;
+
+  async function handleRestoreBaseline() {
+    const confirmed = window.confirm(
+      "Restore the saved baseline schedule? This will undo current replanning changes, clear replan history, and reset disrupted resources."
+    );
+
+    if (!confirmed) return;
+
+    try {
+      setError("");
+      await restoreBaseline();
+      await loadAllData();
+      setActiveTab("overview");
+    } catch (err) {
+      setError(err?.message || "Failed to restore the baseline schedule.");
+    }
+  }
   const placementDates = useMemo(() => {
     const dates = Array.from(
       new Set(
@@ -261,7 +279,7 @@ export default function App() {
               )}
 
               {activeTab === "history" && (
-                <HistoryPage logs={replanLog} />
+                <HistoryPage logs={replanLog} onRestoreBaseline={handleRestoreBaseline} />
               )}
 
               {activeTab === "metrics" && <MetricsPage metrics={metrics} />}
@@ -1419,13 +1437,23 @@ function ActionCard({ title, description, button, onClick, danger }) {
   );
 }
 
-function HistoryPage({ logs }) {
+function HistoryPage({ logs, onRestoreBaseline }) {
   return (
     <div className="space-y-5">
-      <PageHeader
-        title="Replan History"
-        subtitle={`${logs.length} logged schedule changes`}
-      />
+      <div className="flex items-start justify-between">
+        <PageHeader
+          title="Replan History"
+          subtitle={`${logs.length} logged schedule changes`}
+        />
+
+        <button
+          type="button"
+          onClick={onRestoreBaseline}
+          className="border border-amber-300 bg-white px-4 py-2 text-sm font-medium text-amber-800 shadow-sm transition-colors hover:bg-amber-50"
+        >
+          Restore Baseline
+        </button>
+      </div>
 
       <div className="overflow-hidden border border-slate-200 bg-white shadow-sm">
         <table className="w-full text-left text-sm">
