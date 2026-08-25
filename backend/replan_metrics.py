@@ -129,19 +129,23 @@ def save_baseline(cursor):
 
 
 def baseline_ready(cursor):
-    if not all(
-        table_exists(cursor, table)
-        for table in (
-            BASELINE_TABLE,
-            ROOMS_BASELINE_TABLE,
-            PANELS_BASELINE_TABLE,
-            STUDENTS_BASELINE_TABLE,
-        )
-    ):
+    required_tables = (
+        BASELINE_TABLE,
+        ROOMS_BASELINE_TABLE,
+        PANELS_BASELINE_TABLE,
+        STUDENTS_BASELINE_TABLE,
+    )
+
+    if not all(table_exists(cursor, table) for table in required_tables):
         return False
 
-    cursor.execute(f"SELECT COUNT(*) AS cnt FROM {BASELINE_TABLE}")
-    return cursor.fetchone()["cnt"] > 0
+    counts = {}
+    for table in required_tables:
+        cursor.execute(f"SELECT COUNT(*) AS cnt FROM {table}")
+        counts[table] = cursor.fetchone()["cnt"] or 0
+
+    # A usable snapshot must contain all four parts of the baseline.
+    return all(counts.values())
 
 
 def restore_baseline(cursor):
