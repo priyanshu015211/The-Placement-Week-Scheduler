@@ -35,6 +35,16 @@ MySQL
 - Measures replan churn, movement and cancellations.
 - Provides a coordinator dashboard backed by the real MySQL schedule.
 
+## Database setup
+
+Create the MySQL database and complete schema first:
+
+```sql
+SOURCE database/schema.sql;
+```
+
+The schema includes the live tables plus the four baseline snapshot tables used by Restore Baseline. It does not include generated seed data.
+
 ## Backend setup
 
 Create `backend/.env`:
@@ -57,6 +67,8 @@ Run the data generator/seed when a clean database is required:
 ```powershell
 python backend/seed.py
 ```
+
+Seeding also clears any previous baseline snapshots. After generating the schedule you want to return to, save a new baseline.
 
 Run the baseline scheduler:
 
@@ -130,6 +142,7 @@ POST /api/replan/company-delay
 POST /api/replan/panel-drop
 POST /api/replan/room-offline
 POST /api/replan/withdraw
+POST /api/replan/restore-baseline
 ```
 
 Interactive API documentation is available at:
