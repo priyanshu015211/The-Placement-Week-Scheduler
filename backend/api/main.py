@@ -1,4 +1,3 @@
-<<<<<<< HEAD
 import os
 from collections import defaultdict
 
@@ -7,13 +6,6 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
 from db import get_connection
-=======
-from collections import defaultdict
-from fastapi import FastAPI, HTTPException
-from pydantic import BaseModel, Field
-
-from db import get_connection, get_cursor
->>>>>>> 570756796cf9b8d1a793db9a58128c18abce722c
 from replan_metrics import baseline_ready, restore_baseline as restore_saved_baseline
 from replanner import (
     handle_company_delay,
@@ -27,7 +19,6 @@ app = FastAPI(
     version="1.1.0",
 )
 
-<<<<<<< HEAD
 # Comma-separated list of allowed origins, e.g.
 # "https://your-frontend.vercel.app,http://localhost:5173"
 # Set ALLOWED_ORIGINS in the backend's environment variables.
@@ -40,8 +31,6 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-=======
->>>>>>> 570756796cf9b8d1a793db9a58128c18abce722c
 
 # ---------------------------------------------------------
 # Helpers
@@ -53,10 +42,6 @@ def fetch_one(cursor, query, params=()):
 
 
 def conflict_counts(cursor):
-<<<<<<< HEAD
-=======
-    # PostgreSQL-compatible conflict detection
->>>>>>> 570756796cf9b8d1a793db9a58128c18abce722c
     queries = {
         "student_conflicts": """
             SELECT COUNT(*) AS count
@@ -116,11 +101,7 @@ def health():
 @app.get("/api/dashboard")
 def dashboard():
     conn = get_connection()
-<<<<<<< HEAD
     cursor = conn.cursor(dictionary=True)
-=======
-    cursor = get_cursor(conn)
->>>>>>> 570756796cf9b8d1a793db9a58128c18abce722c
 
     try:
         scheduled = fetch_one(
@@ -151,13 +132,8 @@ def dashboard():
             """
             SELECT
                 COUNT(*) AS total,
-<<<<<<< HEAD
                 SUM(status = 'available') AS operational,
                 SUM(status = 'offline') AS offline
-=======
-                SUM(CASE WHEN status = 'available' THEN 1 ELSE 0 END) AS operational,
-                SUM(CASE WHEN status = 'offline' THEN 1 ELSE 0 END) AS offline
->>>>>>> 570756796cf9b8d1a793db9a58128c18abce722c
             FROM rooms
             """,
         )
@@ -167,13 +143,8 @@ def dashboard():
             """
             SELECT
                 COUNT(*) AS total,
-<<<<<<< HEAD
                 SUM(status = 'available') AS available,
                 SUM(status <> 'available') AS unavailable
-=======
-                SUM(CASE WHEN status = 'available' THEN 1 ELSE 0 END) AS available,
-                SUM(CASE WHEN status <> 'available' THEN 1 ELSE 0 END) AS unavailable
->>>>>>> 570756796cf9b8d1a793db9a58128c18abce722c
             FROM panels
             """,
         )
@@ -206,11 +177,7 @@ def dashboard():
 @app.get("/api/interviews")
 def interviews():
     conn = get_connection()
-<<<<<<< HEAD
     cursor = conn.cursor(dictionary=True)
-=======
-    cursor = get_cursor(conn)
->>>>>>> 570756796cf9b8d1a793db9a58128c18abce722c
 
     try:
         cursor.execute(
@@ -259,11 +226,7 @@ def interviews():
 @app.get("/api/rooms")
 def rooms():
     conn = get_connection()
-<<<<<<< HEAD
     cursor = conn.cursor(dictionary=True)
-=======
-    cursor = get_cursor(conn)
->>>>>>> 570756796cf9b8d1a793db9a58128c18abce722c
 
     try:
         cursor.execute(
@@ -297,11 +260,7 @@ def rooms():
 @app.get("/api/panels")
 def panels():
     conn = get_connection()
-<<<<<<< HEAD
     cursor = conn.cursor(dictionary=True)
-=======
-    cursor = get_cursor(conn)
->>>>>>> 570756796cf9b8d1a793db9a58128c18abce722c
 
     try:
         cursor.execute(
@@ -343,11 +302,7 @@ def panels():
 @app.get("/api/students")
 def students():
     conn = get_connection()
-<<<<<<< HEAD
     cursor = conn.cursor(dictionary=True)
-=======
-    cursor = get_cursor(conn)
->>>>>>> 570756796cf9b8d1a793db9a58128c18abce722c
 
     try:
         cursor.execute(
@@ -391,11 +346,7 @@ def students():
 @app.get("/api/companies")
 def companies():
     conn = get_connection()
-<<<<<<< HEAD
     cursor = conn.cursor(dictionary=True)
-=======
-    cursor = get_cursor(conn)
->>>>>>> 570756796cf9b8d1a793db9a58128c18abce722c
 
     try:
         cursor.execute(
@@ -449,11 +400,7 @@ def companies():
 @app.get("/api/metrics")
 def metrics():
     conn = get_connection()
-<<<<<<< HEAD
     cursor = conn.cursor(dictionary=True)
-=======
-    cursor = get_cursor(conn)
->>>>>>> 570756796cf9b8d1a793db9a58128c18abce722c
 
     try:
         totals = fetch_one(
@@ -461,15 +408,9 @@ def metrics():
             """
             SELECT
                 COUNT(*) AS total,
-<<<<<<< HEAD
                 SUM(status = 'scheduled') AS scheduled,
                 SUM(status = 'unscheduled') AS unscheduled,
                 SUM(status = 'cancelled') AS cancelled
-=======
-                SUM(CASE WHEN status = 'scheduled' THEN 1 ELSE 0 END) AS scheduled,
-                SUM(CASE WHEN status = 'unscheduled' THEN 1 ELSE 0 END) AS unscheduled,
-                SUM(CASE WHEN status = 'cancelled' THEN 1 ELSE 0 END) AS cancelled
->>>>>>> 570756796cf9b8d1a793db9a58128c18abce722c
             FROM interviews
             """,
         )
@@ -494,23 +435,15 @@ def metrics():
         scheduled = totals["scheduled"] or 0
         total = totals["total"] or 0
 
-<<<<<<< HEAD
         # Match evaluator.py definitions exactly:
         # - rooms: 8 hours/day across 4 placement days per room
         # - panels: 8 hours on their placement day per panel
         # - waiting: gaps between consecutive same-day interviews per student
-=======
-        # Room utilization
->>>>>>> 570756796cf9b8d1a793db9a58128c18abce722c
         room_used = fetch_one(
             cursor,
             """
             SELECT COALESCE(
-<<<<<<< HEAD
                 SUM(TIMESTAMPDIFF(MINUTE, start_time, end_time)), 0
-=======
-                SUM(EXTRACT(EPOCH FROM (end_time - start_time)) / 60), 0
->>>>>>> 570756796cf9b8d1a793db9a58128c18abce722c
             ) AS used_minutes
             FROM interviews
             WHERE status = 'scheduled'
@@ -531,19 +464,11 @@ def metrics():
             if room_available else 0.0
         )
 
-<<<<<<< HEAD
-=======
-        # Panel utilization
->>>>>>> 570756796cf9b8d1a793db9a58128c18abce722c
         panel_used = fetch_one(
             cursor,
             """
             SELECT COALESCE(
-<<<<<<< HEAD
                 SUM(TIMESTAMPDIFF(MINUTE, start_time, end_time)), 0
-=======
-                SUM(EXTRACT(EPOCH FROM (end_time - start_time)) / 60), 0
->>>>>>> 570756796cf9b8d1a793db9a58128c18abce722c
             ) AS used_minutes
             FROM interviews
             WHERE status = 'scheduled'
@@ -564,10 +489,6 @@ def metrics():
             if panel_available else 0.0
         )
 
-<<<<<<< HEAD
-=======
-        # Waiting times
->>>>>>> 570756796cf9b8d1a793db9a58128c18abce722c
         cursor.execute(
             """
             SELECT student_id, start_time, end_time
@@ -598,12 +519,8 @@ def metrics():
         average_wait = sum(waits) / len(waits) if waits else 0.0
         maximum_wait = max(waits) if waits else 0.0
 
-<<<<<<< HEAD
         # Classify each affected interview by its latest logged change so
         # repaired + cancelled == affected even after multiple disruptions.
-=======
-        # Replan statistics
->>>>>>> 570756796cf9b8d1a793db9a58128c18abce722c
         replan = fetch_one(
             cursor,
             """
@@ -623,15 +540,11 @@ def metrics():
                     CASE
                         WHEN latest.old_start_time IS NOT NULL
                          AND latest.new_start_time IS NOT NULL
-<<<<<<< HEAD
                         THEN ABS(TIMESTAMPDIFF(
                             MINUTE,
                             latest.old_start_time,
                             latest.new_start_time
                         ))
-=======
-                        THEN ABS(EXTRACT(EPOCH FROM (latest.new_start_time - latest.old_start_time)) / 60)
->>>>>>> 570756796cf9b8d1a793db9a58128c18abce722c
                         ELSE 0
                     END
                 ), 0) AS maximum_displacement
@@ -645,22 +558,14 @@ def metrics():
             """,
         )
 
-<<<<<<< HEAD
         # Use the baseline scheduled count when available so churn reflects
         # the proportion of the original schedule that was touched.
-=======
-        # Baseline check
->>>>>>> 570756796cf9b8d1a793db9a58128c18abce722c
         baseline_table = fetch_one(
             cursor,
             """
             SELECT COUNT(*) AS count
             FROM information_schema.tables
-<<<<<<< HEAD
             WHERE table_schema = DATABASE()
-=======
-            WHERE table_schema = current_database()
->>>>>>> 570756796cf9b8d1a793db9a58128c18abce722c
               AND table_name = 'interviews_baseline'
             """,
         )
@@ -763,11 +668,7 @@ def ensure_exists(cursor, table_name, record_id, label):
 @app.post("/api/replan/company-delay")
 def company_delay(request: CompanyDelayRequest):
     conn = get_connection()
-<<<<<<< HEAD
     cursor = conn.cursor(dictionary=True)
-=======
-    cursor = get_cursor(conn)
->>>>>>> 570756796cf9b8d1a793db9a58128c18abce722c
 
     try:
         ensure_exists(cursor, "companies", request.company_id, "Company")
@@ -791,11 +692,7 @@ def company_delay(request: CompanyDelayRequest):
 @app.post("/api/replan/panel-drop")
 def panel_drop(request: PanelDropRequest):
     conn = get_connection()
-<<<<<<< HEAD
     cursor = conn.cursor(dictionary=True)
-=======
-    cursor = get_cursor(conn)
->>>>>>> 570756796cf9b8d1a793db9a58128c18abce722c
 
     try:
         ensure_exists(cursor, "panels", request.panel_id, "Panel")
@@ -815,11 +712,7 @@ def panel_drop(request: PanelDropRequest):
 @app.post("/api/replan/room-offline")
 def room_offline(request: RoomOfflineRequest):
     conn = get_connection()
-<<<<<<< HEAD
     cursor = conn.cursor(dictionary=True)
-=======
-    cursor = get_cursor(conn)
->>>>>>> 570756796cf9b8d1a793db9a58128c18abce722c
 
     try:
         ensure_exists(cursor, "rooms", request.room_id, "Room")
@@ -839,11 +732,7 @@ def room_offline(request: RoomOfflineRequest):
 @app.post("/api/replan/withdraw")
 def withdraw(request: StudentWithdrawalRequest):
     conn = get_connection()
-<<<<<<< HEAD
     cursor = conn.cursor(dictionary=True)
-=======
-    cursor = get_cursor(conn)
->>>>>>> 570756796cf9b8d1a793db9a58128c18abce722c
 
     try:
         ensure_exists(cursor, "students", request.student_id, "Student")
@@ -868,11 +757,7 @@ def withdraw(request: StudentWithdrawalRequest):
 def restore_baseline():
     """Restore the saved baseline using the same source as the CLI tool."""
     conn = get_connection()
-<<<<<<< HEAD
     cursor = conn.cursor(dictionary=True)
-=======
-    cursor = get_cursor(conn)
->>>>>>> 570756796cf9b8d1a793db9a58128c18abce722c
 
     try:
         if not baseline_ready(cursor):
@@ -926,11 +811,7 @@ def restore_baseline():
 @app.get("/api/replan-log")
 def replan_log():
     conn = get_connection()
-<<<<<<< HEAD
     cursor = conn.cursor(dictionary=True)
-=======
-    cursor = get_cursor(conn)
->>>>>>> 570756796cf9b8d1a793db9a58128c18abce722c
 
     try:
         cursor.execute(
@@ -944,8 +825,4 @@ def replan_log():
 
     finally:
         cursor.close()
-<<<<<<< HEAD
         conn.close()
-=======
-        conn.close()
->>>>>>> 570756796cf9b8d1a793db9a58128c18abce722c
