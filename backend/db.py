@@ -1,51 +1,25 @@
+import sqlite3
 import os
+from contextlib import contextmanager
 
-import mysql.connector
-from dotenv import load_dotenv
-
-load_dotenv()
-
-
-def _ensure_operational_columns(conn):
-    """Add resource operational-state columns when upgrading an older DB."""
-    cursor = conn.cursor()
-    try:
-        cursor.execute(
-            """
-            SELECT COUNT(*)
-            FROM information_schema.columns
-            WHERE table_schema = DATABASE()
-              AND table_name = 'rooms'
-              AND column_name = 'status'
-            """
-        )
-        if cursor.fetchone()[0] == 0:
-            cursor.execute(
-                """
-                ALTER TABLE rooms
-                ADD COLUMN status VARCHAR(20) NOT NULL DEFAULT 'available'
-                """
-            )
-
-        cursor.execute(
-            """
-            UPDATE rooms
-            SET status = 'available'
-            WHERE status IS NULL OR status = ''
-            """
-        )
-
-        conn.commit()
-    finally:
-        cursor.close()
-
+DATABASE_FILE = "placement.db"
 
 def get_connection():
-    conn = mysql.connector.connect(
-        host=os.getenv("DB_HOST"),
-        user=os.getenv("DB_USER"),
-        password=os.getenv("DB_PASSWORD"),
-        database=os.getenv("DB_NAME"),
-    )
-    _ensure_operational_columns(conn)
-    return conn
+    """Return a SQLite connection (for Render deployment)."""
+    return sqlite3.connect(DATABASE_FILE, check_same_thread=False)
+
+@contextmanager
+def get_cursor():
+    """Context manager for cursor (handles commit/rollback)."""
+    conn = get_connection()
+    conn.row_factory = sqlite3.Row
+    cursor = conn.cursor()
+    try:
+        yield cursor
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        cursor.close()
+        conn.close()
