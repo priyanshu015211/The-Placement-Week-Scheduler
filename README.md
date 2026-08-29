@@ -1,6 +1,20 @@
 # Placement Week Scheduler
 
+![Live Demo](https://img.shields.io/badge/demo-live-brightgreen)
+![Frontend](https://img.shields.io/badge/frontend-Vercel-black?logo=vercel)
+![Backend](https://img.shields.io/badge/backend-Render-46E3B7?logo=render)
+![Database](https://img.shields.io/badge/database-MySQL%20(Aiven)-4479A1?logo=mysql&logoColor=white)
+![Python](https://img.shields.io/badge/python-3.12-3776AB?logo=python&logoColor=white)
+![FastAPI](https://img.shields.io/badge/backend%20framework-FastAPI-009688?logo=fastapi&logoColor=white)
+![React](https://img.shields.io/badge/frontend%20framework-React%20%2B%20Vite-61DAFB?logo=react&logoColor=white)
+![OR-Tools](https://img.shields.io/badge/optimizer-OR--Tools%20CP--SAT-4285F4?logo=google&logoColor=white)
+
 A placement-week scheduling system for the Mirai Labs Software Developer Intern technical assessment.
+
+## Live deployment
+
+- **Dashboard:** [https://placement-week-scheduler-priyanshu.vercel.app/](https://placement-week-scheduler-priyanshu.vercel.app/)
+- **Backend API:** hosted on Render, connected to a managed MySQL instance on Aiven
 
 ## System architecture
 
