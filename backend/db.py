@@ -1,15 +1,9 @@
 import os
-<<<<<<< HEAD
 import mysql.connector
-=======
-import psycopg2
-from psycopg2.extras import RealDictCursor
->>>>>>> 570756796cf9b8d1a793db9a58128c18abce722c
 from dotenv import load_dotenv
 
 load_dotenv()
 
-<<<<<<< HEAD
 
 def get_connection():
     return mysql.connector.connect(
@@ -23,10 +17,3 @@ def get_connection():
 
 def get_cursor(conn):
     return conn.cursor(dictionary=True)
-=======
-def get_connection():
-    return psycopg2.connect(os.getenv("DATABASE_URL"))
-
-def get_cursor(conn):
-    return conn.cursor(cursor_factory=RealDictCursor)
->>>>>>> 570756796cf9b8d1a793db9a58128c18abce722c
