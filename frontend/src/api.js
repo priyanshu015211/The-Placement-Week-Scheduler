@@ -1,4 +1,8 @@
+<<<<<<< HEAD
 const API_BASE = import.meta.env.VITE_API_BASE || "";
+=======
+const API_BASE = "";
+>>>>>>> 570756796cf9b8d1a793db9a58128c18abce722c
 
 async function request(path, options = {}) {
   const response = await fetch(`${API_BASE}${path}`, {

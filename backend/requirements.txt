@@ -1,3 +1,14 @@
+<<<<<<< HEAD
 fastapi
 mysql-connector-python
 python-dotenv
+=======
+mysql-connector-python
+faker
+numpy
+python-dotenv
+fastapi
+uvicorn
+ortools
+psycopg2-binary
+>>>>>>> 570756796cf9b8d1a793db9a58128c18abce722c
