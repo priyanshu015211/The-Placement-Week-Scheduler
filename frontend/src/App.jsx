@@ -68,6 +68,8 @@ export default function App() {
 
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
+  const [isSyncing, setIsSyncing] = useState(false);
+  const [lastUpdated, setLastUpdated] = useState(null);
 
   const [showReplanModal, setShowReplanModal] = useState(false);
   const [showNotifications, setShowNotifications] = useState(false);
@@ -140,12 +142,14 @@ export default function App() {
       setError(failures.join(" • "));
     } else {
       setError("");
+      setLastUpdated(new Date());
     }
 
     setLoading(false);
   }
 
   async function loadOperationalData() {
+    setIsSyncing(true);
     const requests = [
       getDashboard(),
       getInterviews(),
@@ -201,7 +205,10 @@ export default function App() {
       setError(failures.join(" • "));
     } else {
       setError("");
+      setLastUpdated(new Date());
     }
+
+    setIsSyncing(false);
   }
 
   useEffect(() => {
@@ -315,6 +322,8 @@ export default function App() {
           notificationCount={notificationCount}
           searchQuery={searchQuery}
           onSearchChange={setSearchQuery}
+          isSyncing={isSyncing}
+          lastUpdated={lastUpdated}
         />
 
         {showNotifications && (
@@ -491,6 +500,39 @@ function Sidebar({ activeTab, setActiveTab, systemHealthy }) {
   );
 }
 
+function SyncIndicator({ isSyncing, lastUpdated }) {
+  const [, forceTick] = useState(0);
+
+  useEffect(() => {
+    const timer = setInterval(() => forceTick((n) => n + 1), 1000);
+    return () => clearInterval(timer);
+  }, []);
+
+  let label = "Not synced yet";
+  if (isSyncing) {
+    label = "Syncing…";
+  } else if (lastUpdated) {
+    const seconds = Math.max(
+      0,
+      Math.floor((Date.now() - lastUpdated.getTime()) / 1000),
+    );
+    if (seconds < 5) label = "Updated just now";
+    else if (seconds < 60) label = `Updated ${seconds}s ago`;
+    else label = `Updated ${Math.floor(seconds / 60)}m ago`;
+  }
+
+  return (
+    <div className="flex items-center gap-1.5 text-xs text-slate-400">
+      <span
+        className={`h-1.5 w-1.5 rounded-full ${
+          isSyncing ? "animate-pulse bg-blue-500" : "bg-emerald-500"
+        }`}
+      />
+      {label}
+    </div>
+  );
+}
+
 function TopBar({
   selectedDay,
   setSelectedDay,
@@ -500,6 +542,8 @@ function TopBar({
   notificationCount,
   searchQuery,
   onSearchChange,
+  isSyncing,
+  lastUpdated,
 }) {
   return (
     <header className="z-10 flex h-14 shrink-0 items-center justify-between border-b border-[var(--border)] bg-white px-6">
@@ -543,7 +587,9 @@ function TopBar({
         </div>
       </div>
 
-      <div className="flex flex-1 items-center justify-end">
+      <div className="flex flex-1 items-center justify-end gap-4">
+        <SyncIndicator isSyncing={isSyncing} lastUpdated={lastUpdated} />
+
         <button
           onClick={onOpenNotifications}
           className="relative rounded p-1.5 text-slate-400 transition-colors hover:bg-slate-100 hover:text-slate-600"
