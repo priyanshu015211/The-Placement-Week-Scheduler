@@ -1,0 +1,7 @@
+mysql-connector-python
+faker
+numpy
+python-dotenv
+fastapi
+uvicorn
+ortools
